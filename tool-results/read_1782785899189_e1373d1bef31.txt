@@ -1,0 +1,1202 @@
+     1→  5085→11.1 API Surface Types
+     2→  5086→
+     3→  5087→The platform exposes six distinct API surface types, each with different
+     4→  5088→transport, authentication, and latency characteristics:
+     5→  5089→
+     6→  5090→  ---------------------------------------------------------------------------
+     7→  5091→  Surface Type     Transport           Auth Required    Primary Use
+     8→  5092→  ---------------- ------------------- ---------------- ---------------------
+     9→  5093→  REST             HTTPS/JSON via      JWT (most        CRUD operations,
+    10→  5094→                   Next.js Route       endpoints);      checkout, user
+    11→  5095→                   Handlers            public read on   management
+    12→  5096→                                       catalog          
+    13→  5097→
+    14→  5098→  RPC (Supabase)   Supabase client →   JWT + RLS        FSM transitions,
+    15→  5099→                   PostgreSQL                           atomic operations,
+    16→  5100→                   functions                            complex queries
+    17→  5101→
+    18→  5102→  Edge Functions   Supabase Edge       Stripe/webhook   Webhooks, async
+    19→  5103→                   (Deno) over HTTPS   signature or JWT triggers, external
+    20→  5104→                                                        API calls
+    21→  5105→
+    22→  5106→  Cron (pg_cron)   PostgreSQL          Internal         TTL sweeps, digest
+    23→  5107→                   scheduler           (DB-level)       batches, sync jobs
+    24→  5108→
+    25→  5109→  Webhooks         HTTPS POST from     Signature        Payment events,
+    26→  5110→  (Inbound)        external providers  verification     external status
+    27→  5111→                                       (Stripe, etc.)   updates
+    28→  5112→
+    29→  5113→  Realtime         Supabase Realtime   JWT anon or      Live booking status,
+    30→  5114→  (WebSocket)      over WSS            authenticated    cart sync, presence
+    31→  5115→  ---------------------------------------------------------------------------
+    32→  5116→
+    33→  5117→11.2 Global API Standards
+    34→  5118→
+    35→  5119→The following standards apply to every endpoint across all surface
+    36→  5120→types. Deviations require an explicit ADR entry.
+    37→  5121→
+    38→  5122→11.2.1 Request / Response Envelope
+    39→  5123→
+    40→  5124→All REST endpoints return a structured JSON envelope:
+    41→  5125→
+    42→  5126→Success: { "data": <payload>, "meta": { "request_id": "<uuid>" } }
+    43→  5127→
+    44→  5128→Error: { "error": { "code": "<CODE>", "message": "<human>", "field":
+    45→  5129→"<field|null>" }, "meta": { "request_id": "<uuid>" } }
+    46→  5130→
+    47→  5131→11.2.2 HTTP Status Code Convention
+    48→  5132→
+    49→  5133→  ---------------------------------------------------------------------------
+    50→  5134→  Status Code     Meaning          When Used
+    51→  5135→  --------------- ---------------- ------------------------------------------
+    52→  5136→  200 OK          Success with     GET, successful PUT/PATCH
+    53→  5137→                  body             
+    54→  5138→
+    55→  5139→  201 Created     Resource created POST that creates a new record
+    56→  5140→
+    57→  5141→  204 No Content  Success, no body DELETE, status-only actions
+    58→  5142→
+    59→  5143→  400 Bad Request Validation       Zod schema rejection; malformed input
+    60→  5144→                  failure          
+    61→  5145→
+    62→  5146→  401             Not              Missing or invalid JWT
+    63→  5147→  Unauthorized    authenticated    
+    64→  5148→
+    65→  5149→  403 Forbidden   Not authorized   JWT valid but RLS or role check failed
+    66→  5150→
+    67→  5151→  404 Not Found   Resource absent  ID not found or RLS hides it
+    68→  5152→
+    69→  5153→  409 Conflict    Business rule    Duplicate booking, inventory exhausted,
+    70→  5154→                  violation        FSM conflict
+    71→  5155→
+    72→  5156→  422             Semantic         Valid JSON but fails business rule (not
+    73→  5157→  Unprocessable   validation       Zod)
+    74→  5158→                  failure          
+    75→  5159→
+    76→  5160→  429 Too Many    Rate limit       See per-endpoint rate limits below
+    77→  5161→  Requests        exceeded         
+    78→  5162→
+    79→  5163→  500 Internal    Unexpected       Unhandled exception; logs to observability
+    80→  5164→  Server Error    failure          (Part XXIX)
+    81→  5165→
+    82→  5166→  503 Service     Dependency down  Algolia, Stripe, or Supabase unreachable
+    83→  5167→  Unavailable                      
+    84→  5168→  ---------------------------------------------------------------------------
+    85→  5169→
+    86→  5170→11.2.3 Request Lifecycle (All REST Endpoints)
+    87→  5171→
+    88→  5172→Every REST request passes through the following middleware chain, in
+    89→  5173→order. Failure at any stage halts the chain and returns the mapped
+    90→  5174→status code.
+    91→  5175→
+    92→  5176→-   1. Rate limit check (Edge middleware) → 429 if exceeded
+    93→  5177→
+    94→  5178→-   2. JWT validation (Supabase Auth middleware) → 401 if invalid or
+    95→  5179→    missing
+    96→  5180→
+    97→  5181→-   3. Zod input schema validation → 400 with field-level errors
+    98→  5182→
+    99→  5183→-   4. Business rule pre-checks (BR- assertions) → 409 / 422
+   100→  5184→
+   101→  5185→-   5. RLS enforcement (Supabase DB layer) → 403 / 404
+   102→  5186→
+   103→  5187→-   6. Database operation (within transaction where specified)
+   104→  5188→
+   105→  5189→-   7. Post-write side effects: search index update queued, analytics
+   106→  5190→    event emitted, notifications queued
+   107→  5191→
+   108→  5192→-   8. Response serialized and returned
+   109→  5193→
+   110→  5194→11.2.4 Authentication
+   111→  5195→
+   112→  5196→Bearer token in Authorization header: Authorization: Bearer
+   113→  5197→<supabase_access_token>
+   114→  5198→
+   115→  5199→Public endpoints (catalog read, search) accept requests without a token
+   116→  5200→but operate under the anon RLS role.
+   117→  5201→
+   118→  5202→Webhook endpoints authenticate via provider-specific signature
+   119→  5203→verification (e.g., Stripe-Signature header), not JWT.
+   120→  5204→
+   121→  5205→11.2.5 Versioning
+   122→  5206→
+   123→  5207→API versioning is path-based: /api/v1/... All endpoints in this
+   124→  5208→specification are v1. Breaking changes increment the version and
+   125→  5209→maintain the prior version for a minimum of 90 days before deprecation.
+   126→  5210→
+   127→  5211→11.3 Endpoint Catalog
+   128→  5212→
+   129→  5213→Endpoints are grouped by domain. Each entry specifies the full contract.
+   130→  5214→Rate limits are per-user unless marked per-IP.
+   131→  5215→
+   132→  5216→11.3.1 Authentication Endpoints
+   133→  5217→
+   134→  5218→  -----------------------------------------------------------------------
+   135→  5219→  NOTE: Auth flows are primarily handled by Supabase Auth client SDK. The
+   136→  5220→  endpoints below are platform-side complements: profile creation hooks,
+   137→  5221→  session state queries, and vendor-claim flows.
+   138→  5222→
+   139→  5223→  -----------------------------------------------------------------------
+   140→  5224→
+   141→  5225→POST /api/v1/auth/register
+   142→  5226→
+   143→  5227→  -----------------------------------------------------------------------
+   144→  5228→  Field              Value
+   145→  5229→  ------------------ ----------------------------------------------------
+   146→  5230→  Method             POST
+   147→  5231→
+   148→  5232→  Route              /api/v1/auth/register
+   149→  5233→
+   150→  5234→  Purpose            Creates user_profiles record after Supabase Auth
+   151→  5235→                     signup; triggers welcome email
+   152→  5236→
+   153→  5237→  Auth               Supabase anon JWT (new user token from signup)
+   154→  5238→
+   155→  5239→  Rate Limit         10 requests / hour / IP
+   156→  5240→
+   157→  5241→  Input Schema       { display_name: string (1–80 chars), timezone?:
+   158→  5242→                     string (IANA), locale?: string (BCP-47) }
+   159→  5243→
+   160→  5244→  Output Schema      { data: { user_id: uuid, display_name: string,
+   161→  5245→                     created_at: iso8601 } }
+   162→  5246→
+   163→  5247→  Side Effects       Inserts user_profiles row; queues welcome email
+   164→  5248→                     (template: email-welcome); emits user.registered
+   165→  5249→                     analytics event
+   166→  5250→
+   167→  5251→  Error Codes        409 USER_ALREADY_EXISTS if profile already exists
+   168→  5252→                     for this auth.uid()
+   169→  5253→
+   170→  5254→  Performance Budget P95 < 500ms
+   171→  5255→  -----------------------------------------------------------------------
+   172→  5256→
+   173→  5257→GET /api/v1/auth/me
+   174→  5258→
+   175→  5259→  -----------------------------------------------------------------------
+   176→  5260→  Field              Value
+   177→  5261→  ------------------ ----------------------------------------------------
+   178→  5262→  Method             GET
+   179→  5263→
+   180→  5264→  Route              /api/v1/auth/me
+   181→  5265→
+   182→  5266→  Purpose            Returns authenticated user's profile, role, and
+   183→  5267→                     vendor memberships
+   184→  5268→
+   185→  5269→  Auth               Authenticated JWT required
+   186→  5270→
+   187→  5271→  Rate Limit         120 requests / minute / user
+   188→  5272→
+   189→  5273→  Output Schema      { data: { user_id, display_name, role,
+   190→  5274→                     email_verified, vendor_memberships: [{ vendor_id,
+   191→  5275→                     vendor_name, role }], notification_prefs, created_at
+   192→  5276→                     } }
+   193→  5277→
+   194→  5278→  Caching            Cache-Control: private, max-age=60 — client caches
+   195→  5279→                     for 60s; busted on role change
+   196→  5280→
+   197→  5281→  Performance Budget P95 < 100ms (cached)
+   198→  5282→  -----------------------------------------------------------------------
+   199→  5283→
+   200→  5284→PATCH /api/v1/auth/me
+   201→  5285→
+   202→  5286→  -----------------------------------------------------------------------
+   203→  5287→  Field              Value
+   204→  5288→  ------------------ ----------------------------------------------------
+   205→  5289→  Method             PATCH
+   206→  5290→
+   207→  5291→  Route              /api/v1/auth/me
+   208→  5292→
+   209→  5293→  Purpose            Updates user profile fields: display_name, timezone,
+   210→  5294→                     locale, notification_prefs
+   211→  5295→
+   212→  5296→  Auth               Authenticated JWT required
+   213→  5297→
+   214→  5298→  Rate Limit         30 requests / hour / user
+   215→  5299→
+   216→  5300→  Input Schema       Partial<{ display_name: string (1–80), timezone:
+   217→  5301→                     string, locale: string, notification_prefs: object
+   218→  5302→                     }>
+   219→  5303→
+   220→  5304→  Validation         display_name: 1–80 chars, no leading/trailing
+   221→  5305→                     whitespace. timezone: must be valid IANA string.
+   222→  5306→                     locale: BCP-47 format.
+   223→  5307→
+   224→  5308→  Output Schema      { data: { updated fields } }
+   225→  5309→
+   226→  5310→  Side Effects       Updates user_profiles; emits user.profile_updated
+   227→  5311→                     analytics event
+   228→  5312→
+   229→  5313→  Performance Budget P95 < 300ms
+   230→  5314→  -----------------------------------------------------------------------
+   231→  5315→
+   232→  5316→11.3.2 Inventory Endpoints
+   233→  5317→
+   234→  5318→Inventory endpoints govern the lifecycle of InventoryItems (DOM-003).
+   235→  5319→Vendor-write endpoints enforce vendor_id scoping via RLS. Public read
+   236→  5320→endpoints are available without authentication.
+   237→  5321→
+   238→  5322→GET /api/v1/inventory
+   239→  5323→
+   240→  5324→  -----------------------------------------------------------------------
+   241→  5325→  Field              Value
+   242→  5326→  ------------------ ----------------------------------------------------
+   243→  5327→  Method             GET
+   244→  5328→
+   245→  5329→  Route              /api/v1/inventory
+   246→  5330→
+   247→  5331→  Purpose            Returns paginated list of published InventoryItems
+   248→  5332→                     matching filters. Primary catalog browse endpoint.
+   249→  5333→
+   250→  5334→  Auth               Optional (anon or authenticated)
+   251→  5335→
+   252→  5336→  Rate Limit         300 requests / minute / IP
+   253→  5337→
+   254→  5338→  Required Query     location_id: uuid OR (lat: float, lng: float,
+   255→  5339→  Params             radius_km: integer 1–100)
+   256→  5340→
+   257→  5341→  Optional Query     category: inventory_category enum; price_min_cents:
+   258→  5342→  Params             integer; price_max_cents: integer; date_from:
+   259→  5343→                     ISO8601; date_to: ISO8601; attendees: integer; page:
+   260→  5344→                     integer (default 1); per_page: integer (default 24,
+   261→  5345→                     max 48); sort: 'relevance' | 'price_asc' |
+   262→  5346→                     'price_desc' | 'newest'
+   263→  5347→
+   264→  5348→  Output Schema      { data: { items: InventoryItem[], total: integer,
+   265→  5349→                     page: integer, per_page: integer, has_next: boolean
+   266→  5350→                     }, meta: { request_id } }
+   267→  5351→
+   268→  5352→  Business Rules     BR-GLOBAL-001: location param is required — returns
+   269→  5353→                     400 LOCATION_REQUIRED if missing
+   270→  5354→
+   271→  5355→  Caching            Cache-Control: public, max-age=60,
+   272→  5356→                     stale-while-revalidate=300
+   273→  5357→
+   274→  5358→  Error Codes        400 LOCATION_REQUIRED; 400 INVALID_CATEGORY; 400
+   275→  5359→                     INVALID_DATE_RANGE
+   276→  5360→
+   277→  5361→  Performance Budget P95 < 200ms (Algolia-backed); < 800ms (DB fallback)
+   278→  5362→  -----------------------------------------------------------------------
+   279→  5363→
+   280→  5364→GET /api/v1/inventory/:id
+   281→  5365→
+   282→  5366→  -----------------------------------------------------------------------
+   283→  5367→  Field              Value
+   284→  5368→  ------------------ ----------------------------------------------------
+   285→  5369→  Method             GET
+   286→  5370→
+   287→  5371→  Route              /api/v1/inventory/:id
+   288→  5372→
+   289→  5373→  Purpose            Returns full detail for a single InventoryItem
+   290→  5374→                     including pricing rules, availability, media, and
+   291→  5375→                     vendor info
+   292→  5376→
+   293→  5377→  Auth               Optional
+   294→  5378→
+   295→  5379→  Rate Limit         600 requests / minute / IP
+   296→  5380→
+   297→  5381→  Path Params        id: uuid
+   298→  5382→
+   299→  5383→  Output Schema      { data: { ...InventoryItem, vendor: { id, name,
+   300→  5384→                     slug, stripe_charges_enabled }, media: MediaAsset[],
+   301→  5385→                     pricing_rules: PricingRule[], availability:
+   302→  5386→                     AvailabilityBlock[] } }
+   303→  5387→
+   304→  5388→  Business Rules     RLS: only PUBLISHED items visible to anon/consumer;
+   305→  5389→                     DRAFT/PAUSED visible to owning vendor staff
+   306→  5390→
+   307→  5391→  Caching            Cache-Control: public, max-age=120,
+   308→  5392→                     stale-while-revalidate=600
+   309→  5393→
+   310→  5394→  Error Codes        404 NOT_FOUND
+   311→  5395→
+   312→  5396→  Performance Budget P95 < 150ms
+   313→  5397→  -----------------------------------------------------------------------
+   314→  5398→
+   315→  5399→POST /api/v1/inventory
+   316→  5400→
+   317→  5401→  -----------------------------------------------------------------------
+   318→  5402→  Field              Value
+   319→  5403→  ------------------ ----------------------------------------------------
+   320→  5404→  Method             POST
+   321→  5405→
+   322→  5406→  Route              /api/v1/inventory
+   323→  5407→
+   324→  5408→  Purpose            Creates a new InventoryItem in DRAFT state for the
+   325→  5409→                     authenticated vendor
+   326→  5410→
+   327→  5411→  Auth               Authenticated JWT; vendor_id in JWT claims
+   328→  5412→                     (VENDOR_OWNER or VENDOR_MANAGER role)
+   329→  5413→
+   330→  5414→  Rate Limit         60 creates / hour / vendor
+   331→  5415→
+   332→  5416→  Input Schema       { category: inventory_category; title: string
+   333→  5417→                     (3–200); description?: string (max 5000);
+   334→  5418→                     price_cents: integer >= 0; is_free?: boolean;
+   335→  5419→                     location_id: uuid; metadata: object; capacity?:
+   336→  5420→                     integer; quantity_available?: integer }
+   337→  5421→
+   338→  5422→  Validation         BR-I-001 (valid category); BR-I-006 (price);
+   339→  5423→                     metadata shape validated per category enum
+   340→  5424→
+   341→  5425→  Output Schema      { data: { id: uuid, status: 'DRAFT', ...fields } }
+   342→  5426→
+   343→  5427→  Side Effects       Inserts inventory_items row; does NOT push to
+   344→  5428→                     Algolia (only on publish); emits inventory.draft
+   345→  5429→                     analytics event
+   346→  5430→
+   347→  5431→  Error Codes        400 INVALID_CATEGORY; 400 INVALID_PRICE; 400
+   348→  5432→                     INVALID_METADATA; 403 NOT_A_VENDOR
+   349→  5433→
+   350→  5434→  Performance Budget P95 < 500ms
+   351→  5435→  -----------------------------------------------------------------------
+   352→  5436→
+   353→  5437→PATCH /api/v1/inventory/:id
+   354→  5438→
+   355→  5439→  -----------------------------------------------------------------------
+   356→  5440→  Field              Value
+   357→  5441→  ------------------ ----------------------------------------------------
+   358→  5442→  Method             PATCH
+   359→  5443→
+   360→  5444→  Route              /api/v1/inventory/:id
+   361→  5445→
+   362→  5446→  Purpose            Updates fields on a DRAFT or PAUSED InventoryItem.
+   363→  5447→                     PUBLISHED items require publish re-validation after
+   364→  5448→                     update.
+   365→  5449→
+   366→  5450→  Auth               Authenticated JWT; must be member of owning
+   367→  5451→                     VendorAccount (BR-I-004)
+   368→  5452→
+   369→  5453→  Rate Limit         120 / hour / vendor
+   370→  5454→
+   371→  5455→  Input Schema       Partial<{ title, description, price_cents, metadata,
+   372→  5456→                     capacity, quantity_available, location_id }>
+   373→  5457→
+   374→  5458→  Business Rules     BR-I-004: only owning vendor may update. CONFIRMED
+   375→  5459→                     Reservations trigger validation to ensure update
+   376→  5460→                     does not break existing bookings.
+   377→  5461→
+   378→  5462→  Output Schema      { data: { ...updated InventoryItem } }
+   379→  5463→
+   380→  5464→  Side Effects       If item is PUBLISHED: re-queues Algolia index
+   381→  5465→                     update. Emits inventory.updated analytics event.
+   382→  5466→
+   383→  5467→  Error Codes        403 NOT_AUTHORIZED; 409 HAS_ACTIVE_RESERVATIONS (for
+   384→  5468→                     capacity reductions below current reserved count)
+   385→  5469→
+   386→  5470→  Performance Budget P95 < 400ms
+   387→  5471→  -----------------------------------------------------------------------
+   388→  5472→
+   389→  5473→POST /api/v1/inventory/:id/publish
+   390→  5474→
+   391→  5475→  -----------------------------------------------------------------------
+   392→  5476→  Field              Value
+   393→  5477→  ------------------ ----------------------------------------------------
+   394→  5478→  Method             POST
+   395→  5479→
+   396→  5480→  Route              /api/v1/inventory/:id/publish
+   397→  5481→
+   398→  5482→  Purpose            Transitions InventoryItem from DRAFT → PUBLISHED.
+   399→  5483→                     Runs full metadata validation before transition.
+   400→  5484→
+   401→  5485→  Auth               Authenticated JWT; VENDOR_OWNER role required
+   402→  5486→
+   403→  5487→  Input Schema       None (empty body or {})
+   404→  5488→
+   405→  5489→  Validation         BR-EV-001 (events: at least one TicketTier).
+   406→  5490→                     BR-I-002 (metadata complete). BR-EV-006 (event date
+   407→  5491→                     future).
+   408→  5492→
+   409→  5493→  Output Schema      { data: { id, status: 'PUBLISHED', published_at:
+   410→  5494→                     iso8601 } }
+   411→  5495→
+   412→  5496→  Side Effects       FSM transition via RPC (rpc_publish_inventory_item);
+   413→  5497→                     Algolia document pushed (search-ingest Edge Function
+   414→  5498→                     queued); inventory.published event emitted;
+   415→  5499→                     analytics event
+   416→  5500→
+   417→  5501→  Error Codes        400 METADATA_INCOMPLETE (with field list); 409
+   418→  5502→                     INVALID_STATE_TRANSITION (item not in DRAFT/PAUSED)
+   419→  5503→
+   420→  5504→  Performance Budget P95 < 800ms (includes Algolia queue)
+   421→  5505→  -----------------------------------------------------------------------
+   422→  5506→
+   423→  5507→POST /api/v1/inventory/:id/pause
+   424→  5508→
+   425→  5509→  -----------------------------------------------------------------------
+   426→  5510→  Field              Value
+   427→  5511→  ------------------ ----------------------------------------------------
+   428→  5512→  Method             POST
+   429→  5513→
+   430→  5514→  Route              /api/v1/inventory/:id/pause
+   431→  5515→
+   432→  5516→  Purpose            Transitions PUBLISHED → PAUSED. Item removed from
+   433→  5517→                     search; no new Reservations accepted.
+   434→  5518→
+   435→  5519→  Auth               VENDOR_OWNER or VENDOR_MANAGER; or MODERATOR/ADMIN
+   436→  5520→                     for moderation pause
+   437→  5521→
+   438→  5522→  Output Schema      { data: { id, status: 'PAUSED' } }
+   439→  5523→
+   440→  5524→  Side Effects       FSM transition; Algolia document deleted; Cart items
+   441→  5525→                     containing this item flagged with ITEM_UNAVAILABLE;
+   442→  5526→                     users with pending Cart items notified
+   443→  5527→
+   444→  5528→  Error Codes        409 HAS_ACTIVE_CHECKOUT (item in a checkout session
+   445→  5529→                     with held inventory — must wait for TTL)
+   446→  5530→
+   447→  5531→  Performance Budget P95 < 600ms
+   448→  5532→  -----------------------------------------------------------------------
+   449→  5533→
+   450→  5534→DELETE /api/v1/inventory/:id
+   451→  5535→
+   452→  5536→  -----------------------------------------------------------------------
+   453→  5537→  Field              Value
+   454→  5538→  ------------------ ----------------------------------------------------
+   455→  5539→  Method             DELETE
+   456→  5540→
+   457→  5541→  Route              /api/v1/inventory/:id
+   458→  5542→
+   459→  5543→  Purpose            Archives (soft-deletes) an InventoryItem. Hard
+   460→  5544→                     delete is not permitted.
+   461→  5545→
+   462→  5546→  Auth               VENDOR_OWNER only
+   463→  5547→
+   464→  5548→  Business Rules     BR-I-003: item with active (PENDING or CONFIRMED)
+   465→  5549→                     Reservations cannot be archived — returns 409
+   466→  5550→
+   467→  5551→  Output Schema      204 No Content
+   468→  5552→
+   469→  5553→  Side Effects       Sets status = 'ARCHIVED', archived_at = NOW();
+   470→  5554→                     Algolia document removed
+   471→  5555→
+   472→  5556→  Error Codes        409 HAS_ACTIVE_RESERVATIONS
+   473→  5557→
+   474→  5558→  Performance Budget P95 < 400ms
+   475→  5559→  -----------------------------------------------------------------------
+   476→  5560→
+   477→  5561→11.3.3 Reservation Endpoints
+   478→  5562→
+   479→  5563→Reservation endpoints govern the booking lifecycle. All state
+   480→  5564→transitions go through named RPCs — no direct status writes from API
+   481→  5565→routes.
+   482→  5566→
+   483→  5567→GET /api/v1/reservations
+   484→  5568→
+   485→  5569→  -----------------------------------------------------------------------
+   486→  5570→  Field              Value
+   487→  5571→  ------------------ ----------------------------------------------------
+   488→  5572→  Method             GET
+   489→  5573→
+   490→  5574→  Route              /api/v1/reservations
+   491→  5575→
+   492→  5576→  Purpose            Returns the authenticated user's reservations, or
+   493→  5577→                     vendor's incoming reservations (scoped by role)
+   494→  5578→
+   495→  5579→  Auth               Authenticated JWT required
+   496→  5580→
+   497→  5581→  Query Params       status?: reservation_status[]; from?: ISO8601; to?:
+   498→  5582→                     ISO8601; page?: integer; per_page?: integer (max 50)
+   499→  5583→
+   500→  5584→  Output Schema      { data: { reservations: [{ id, status,
+   501→  5585→  (Consumer)         inventory_item: { id, title, category }, starts_at,
+   502→  5586→                     ends_at, total_price_cents, confirmed_at }], total,
+   503→  5587→                     page } }
+   504→  5588→
+   505→  5589→  Output Schema      Same shape; scoped to reservations on vendor's
+   506→  5590→  (Vendor)           inventory_items via RLS
+   507→  5591→
+   508→  5592→  Caching            No caching — reservation status is real-time
+   509→  5593→                     sensitive
+   510→  5594→
+   511→  5595→  Performance Budget P95 < 300ms
+   512→  5596→  -----------------------------------------------------------------------
+   513→  5597→
+   514→  5598→GET /api/v1/reservations/:id
+   515→  5599→
+   516→  5600→  -----------------------------------------------------------------------
+   517→  5601→  Field              Value
+   518→  5602→  ------------------ ----------------------------------------------------
+   519→  5603→  Method             GET
+   520→  5604→
+   521→  5605→  Route              /api/v1/reservations/:id
+   522→  5606→
+   523→  5607→  Purpose            Returns full detail of a single Reservation
+   524→  5608→                     including payment status, cancellation policy
+   525→  5609→                     snapshot, and itinerary context
+   526→  5610→
+   527→  5611→  Auth               Authenticated JWT; RLS enforces consumer sees own,
+   528→  5612→                     vendor sees bookings on own inventory
+   529→  5613→
+   530→  5614→  Output Schema      { data: { ...Reservation, inventory_item: { id,
+   531→  5615→                     title, category, vendor: { id, name } }, payment: {
+   532→  5616→                     status, stripe_payment_intent_id },
+   533→  5617→                     itinerary_session_id } }
+   534→  5618→
+   535→  5619→  Error Codes        404 NOT_FOUND
+   536→  5620→
+   537→  5621→  Performance Budget P95 < 200ms
+   538→  5622→  -----------------------------------------------------------------------
+   539→  5623→
+   540→  5624→POST /api/v1/reservations/:id/cancel
+   541→  5625→
+   542→  5626→  -----------------------------------------------------------------------
+   543→  5627→  Field              Value
+   544→  5628→  ------------------ ----------------------------------------------------
+   545→  5629→  Method             POST
+   546→  5630→
+   547→  5631→  Route              /api/v1/reservations/:id/cancel
+   548→  5632→
+   549→  5633→  Purpose            Initiates the cancellation FSM for a CONFIRMED or
+   550→  5634→                     PENDING Reservation
+   551→  5635→
+   552→  5636→  Auth               Authenticated JWT; consumer (own reservation) or
+   553→  5637→                     vendor (their inventory's reservation) or ADMIN
+   554→  5638→
+   555→  5639→  Input Schema       { reason?: string (max 500 chars) }
+   556→  5640→
+   557→  5641→  Business Rules     BR-R-006: cancellation policy terms evaluated at
+   558→  5642→                     cancellation time. Refund amount calculated and
+   559→  5643→                     returned in response before confirmation.
+   560→  5644→                     Cancellation is two-phase for CONFIRMED: preview
+   561→  5645→                     refund → confirm cancel.
+   562→  5646→
+   563→  5647→  Output Schema      { data: { refund_amount_cents: integer,
+   564→  5648→  (Preview, first    refund_policy_applied: string, confirm_token: string
+   565→  5649→  call)              (expires 5 min) } }
+   566→  5650→
+   567→  5651→  Output Schema      { data: { reservation_id, status: 'CANCELLED',
+   568→  5652→  (Confirm, second   refund_amount_cents, stripe_refund_id } }
+   569→  5653→  call with          
+   570→  5654→  confirm_token)     
+   571→  5655→
+   572→  5656→  Side Effects       FSM: CONFIRMED → CANCELLED; Stripe refund initiated;
+   573→  5657→                     inventory released; reservation.cancelled event;
+   574→  5658→                     both parties notified
+   575→  5659→
+   576→  5660→  Error Codes        409 INVALID_STATE (not cancellable); 409
+   577→  5661→                     CONFIRM_TOKEN_EXPIRED
+   578→  5662→
+   579→  5663→  Performance Budget P95 < 1000ms (includes Stripe API call)
+   580→  5664→  -----------------------------------------------------------------------
+   581→  5665→
+   582→  5666→11.3.4 Cart & Checkout Endpoints
+   583→  5667→
+   584→  5668→  -----------------------------------------------------------------------
+   585→  5669→  CRITICAL: BR-C-004: If any Cart item fails inventory lock at checkout,
+   586→  5670→  the entire checkout aborts. No partial checkouts are permitted. The
+   587→  5671→  checkout endpoint must run all inventory locks inside a single
+   588→  5672→  serializable database transaction.
+   589→  5673→
+   590→  5674→  -----------------------------------------------------------------------
+   591→  5675→
+   592→  5676→GET /api/v1/cart
+   593→  5677→
+   594→  5678→  -----------------------------------------------------------------------
+   595→  5679→  Field              Value
+   596→  5680→  ------------------ ----------------------------------------------------
+   597→  5681→  Method             GET
+   598→  5682→
+   599→  5683→  Route              /api/v1/cart
+   600→  5684→
+   601→  5685→  Purpose            Returns the current cart state for the authenticated
+   602→  5686→                     user (or anon session)
+   603→  5687→
+   604→  5688→  Auth               Optional (anon JWT or authenticated JWT)
+   605→  5689→
+   606→  5690→  Output Schema      { data: { cart_id: uuid, items: [{ cart_line_id,
+   607→  5691→                     inventory_item_id, title, category, quantity,
+   608→  5692→                     price_cents, params: { starts_at?, ends_at?,
+   609→  5693→                     attendees? }, item_status: 'AVAILABLE' |
+   610→  5694→                     'UNAVAILABLE' | 'PRICE_CHANGED' }], subtotal_cents:
+   611→  5695→                     integer, expires_at: iso8601 } }
+   612→  5696→
+   613→  5697→  Caching            No caching — cart is real-time
+   614→  5698→
+   615→  5699→  Performance Budget P95 < 150ms
+   616→  5700→  -----------------------------------------------------------------------
+   617→  5701→
+   618→  5702→POST /api/v1/cart/items
+   619→  5703→
+   620→  5704→  -----------------------------------------------------------------------
+   621→  5705→  Field              Value
+   622→  5706→  ------------------ ----------------------------------------------------
+   623→  5707→  Method             POST
+   624→  5708→
+   625→  5709→  Route              /api/v1/cart/items
+   626→  5710→
+   627→  5711→  Purpose            Adds an InventoryItem to the cart. Does NOT hold
+   628→  5712→                     inventory — holding occurs at checkout.
+   629→  5713→
+   630→  5714→  Auth               Optional (anon or authenticated)
+   631→  5715→
+   632→  5716→  Input Schema       { inventory_item_id: uuid; quantity: integer (>= 1);
+   633→  5717→                     params?: { starts_at?: ISO8601; ends_at?: ISO8601;
+   634→  5718→                     attendees?: integer } }
+   635→  5719→
+   636→  5720→  Business Rules     BR-I-005: PAUSED items cannot be added. Item
+   637→  5721→                     availability is checked at add time (soft check —
+   638→  5722→                     hard lock at checkout). BR-C-001:
+   639→  5723→                     cross-category/cross-vendor items allowed.
+   640→  5724→
+   641→  5725→  Output Schema      { data: { cart_line_id: uuid, cart: <full cart
+   642→  5726→                     state> } }
+   643→  5727→
+   644→  5728→  Side Effects       Emits cart.item_added analytics event
+   645→  5729→
+   646→  5730→  Error Codes        404 ITEM_NOT_FOUND; 409 ITEM_UNAVAILABLE; 400
+   647→  5731→                     INVALID_QUANTITY
+   648→  5732→
+   649→  5733→  Performance Budget P95 < 250ms
+   650→  5734→  -----------------------------------------------------------------------
+   651→  5735→
+   652→  5736→DELETE /api/v1/cart/items/:cart_line_id
+   653→  5737→
+   654→  5738→  -----------------------------------------------------------------------
+   655→  5739→  Field              Value
+   656→  5740→  ------------------ ----------------------------------------------------
+   657→  5741→  Method             DELETE
+   658→  5742→
+   659→  5743→  Route              /api/v1/cart/items/:cart_line_id
+   660→  5744→
+   661→  5745→  Purpose            Removes a line item from the cart
+   662→  5746→
+   663→  5747→  Auth               Optional (same session as cart)
+   664→  5748→
+   665→  5749→  Output Schema      { data: { cart: <full cart state> } }
+   666→  5750→
+   667→  5751→  Side Effects       Emits cart.item_removed analytics event
+   668→  5752→
+   669→  5753→  Performance Budget P95 < 150ms
+   670→  5754→  -----------------------------------------------------------------------
+   671→  5755→
+   672→  5756→POST /api/v1/cart/checkout
+   673→  5757→
+   674→  5758→  -----------------------------------------------------------------------
+   675→  5759→  Field              Value
+   676→  5760→  ------------------ ----------------------------------------------------
+   677→  5761→  Method             POST
+   678→  5762→
+   679→  5763→  Route              /api/v1/cart/checkout
+   680→  5764→
+   681→  5765→  Purpose            Initiates checkout: locks inventory, creates PENDING
+   682→  5766→                     Reservations, creates Stripe PaymentIntent, returns
+   683→  5767→                     client_secret for frontend payment confirmation
+   684→  5768→
+   685→  5769→  Auth               Authenticated JWT required (BR-C-005: must upgrade
+   686→  5770→                     from anon before checkout)
+   687→  5771→
+   688→  5772→  Input Schema       { itinerary_session_id?: uuid (attach to existing
+   689→  5773→                     itinerary); guest_details?: { name: string, email:
+   690→  5774→                     string, phone?: string } }
+   691→  5775→
+   692→  5776→  Transaction        Single serializable Postgres transaction: (1) lock
+   693→  5777→  Boundary           all InventoryItems; (2) check availability; (3)
+   694→  5778→                     create Reservations (PENDING); (4) decrement
+   695→  5779→                     quantity_reserved; (5) set expires_at = NOW() + TTL.
+   696→  5780→                     If any step fails, full rollback.
+   697→  5781→
+   698→  5782→  Business Rules     BR-C-003; BR-C-004; BR-R-004; BR-U-005 (email
+   699→  5783→                     verified). For CONFLICT-006 (multi-vendor split
+   700→  5784→                     payouts) — interim implementation: single Stripe
+   701→  5785→                     PaymentIntent with platform fee; split payouts via
+   702→  5786→                     Transfer API post-capture. Full resolution in Part
+   703→  5787→                     XLII Conflict #6.
+   704→  5788→
+   705→  5789→  Output Schema      { data: { checkout_session_id: uuid,
+   706→  5790→                     stripe_client_secret: string, reservations: [{ id,
+   707→  5791→                     inventory_item_id, status: 'PENDING', expires_at }],
+   708→  5792→                     total_price_cents: integer, expires_at: iso8601 } }
+   709→  5793→
+   710→  5794→  Side Effects       Creates Reservation rows (PENDING); starts TTL
+   711→  5795→                     clock; emits checkout.started analytics event;
+   712→  5796→                     cart.checkout_started event for Realtime
+   713→  5797→
+   714→  5798→  Error Codes        409 ITEM_UNAVAILABLE (with item list); 409
+   715→  5799→                     INVENTORY_LOCK_FAILED; 400 EMPTY_CART; 403
+   716→  5800→                     EMAIL_NOT_VERIFIED; 400 CART_EXPIRED
+   717→  5801→
+   718→  5802→  Performance Budget P95 < 2000ms (serializable transaction + Stripe API)
+   719→  5803→  -----------------------------------------------------------------------
+   720→  5804→
+   721→  5805→11.3.5 Itinerary Endpoints
+   722→  5806→
+   723→  5807→Itinerary endpoints manage ItinerarySessions (DOM-005) — the parent
+   724→  5808→record that groups cross-vertical Reservations into a single trip or
+   725→  5809→occasion.
+   726→  5810→
+   727→  5811→POST /api/v1/itineraries
+   728→  5812→
+   729→  5813→  -----------------------------------------------------------------------
+   730→  5814→  Field              Value
+   731→  5815→  ------------------ ----------------------------------------------------
+   732→  5816→  Method             POST
+   733→  5817→
+   734→  5818→  Route              /api/v1/itineraries
+   735→  5819→
+   736→  5820→  Purpose            Creates a new ItinerarySession, optionally attaching
+   737→  5821→                     existing confirmed Reservations
+   738→  5822→
+   739→  5823→  Auth               Authenticated JWT
+   740→  5824→
+   741→  5825→  Input Schema       { title?: string (max 200); occasion_type?: string;
+   742→  5826→                     reservation_ids?: uuid[] }
+   743→  5827→
+   744→  5828→  Business Rules     BR-IT-001: session must have at least one
+   745→  5829→                     Reservation before sharing (enforced at share-time,
+   746→  5830→                     not creation). Reservations in reservation_ids must
+   747→  5831→                     belong to the calling user.
+   748→  5832→
+   749→  5833→  Output Schema      { data: { id: uuid, title, status: 'ACTIVE',
+   750→  5834→                     reservations: [...], created_at } }
+   751→  5835→
+   752→  5836→  Side Effects       Emits itinerary.created analytics event
+   753→  5837→
+   754→  5838→  Performance Budget P95 < 400ms
+   755→  5839→  -----------------------------------------------------------------------
+   756→  5840→
+   757→  5841→GET /api/v1/itineraries/:id
+   758→  5842→
+   759→  5843→  -----------------------------------------------------------------------
+   760→  5844→  Field              Value
+   761→  5845→  ------------------ ----------------------------------------------------
+   762→  5846→  Method             GET
+   763→  5847→
+   764→  5848→  Route              /api/v1/itineraries/:id
+   765→  5849→
+   766→  5850→  Purpose            Returns full itinerary with all Reservations,
+   767→  5851→                     members, and conflict warnings
+   768→  5852→
+   769→  5853→  Auth               Authenticated JWT; owner or member (per
+   770→  5854→                     ItineraryMember.permission)
+   771→  5855→
+   772→  5856→  Output Schema      { data: { id, title, status, owner: { user_id,
+   773→  5857→                     display_name }, members: [{ user_id, display_name,
+   774→  5858→                     permission }], reservations: [{ ...Reservation,
+   775→  5859→                     inventory_item, vendor }], conflicts: [{ type:
+   776→  5860→                     'TIME_OVERLAP' | 'LOCATION_GAP', reservation_ids:
+   777→  5861→                     [uuid, uuid], message: string }], total_cost_cents:
+   778→  5862→                     integer } }
+   779→  5863→
+   780→  5864→  Notes              conflicts array is computed at read time by
+   781→  5865→                     comparing starts_at / ends_at across all
+   782→  5866→                     reservations. Geo-proximity warnings deferred to
+   783→  5867→                     CONFLICT-005 resolution.
+   784→  5868→
+   785→  5869→  Error Codes        404 NOT_FOUND; 403 NOT_A_MEMBER
+   786→  5870→
+   787→  5871→  Performance Budget P95 < 400ms
+   788→  5872→  -----------------------------------------------------------------------
+   789→  5873→
+   790→  5874→POST /api/v1/itineraries/:id/share
+   791→  5875→
+   792→  5876→  -----------------------------------------------------------------------
+   793→  5877→  Field              Value
+   794→  5878→  ------------------ ----------------------------------------------------
+   795→  5879→  Method             POST
+   796→  5880→
+   797→  5881→  Route              /api/v1/itineraries/:id/share
+   798→  5882→
+   799→  5883→  Purpose            Generates a shareable link or invites specific users
+   800→  5884→                     by email with VIEW or EDIT permission
+   801→  5885→
+   802→  5886→  Auth               Authenticated JWT; itinerary owner or EDIT member
+   803→  5887→
+   804→  5888→  Input Schema       { type: 'link' | 'email'; permission: 'VIEW' |
+   805→  5889→                     'EDIT'; emails?: string[] (required if type=email) }
+   806→  5890→
+   807→  5891→  Business Rules     BR-IT-001: itinerary must have >= 1 Reservation.
+   808→  5892→                     BR-IT-002: invited users get the specified
+   809→  5893→                     permission; link recipients get VIEW by default.
+   810→  5894→
+   811→  5895→  Output Schema      { data: { share_url?: string (if type=link);
+   812→  5896→                     invited_emails?: string[]; expires_at?: iso8601 } }
+   813→  5897→
+   814→  5898→  Side Effects       Sends invitation emails (template:
+   815→  5899→                     email-itinerary-invite); emits itinerary.shared
+   816→  5900→                     analytics event
+   817→  5901→
+   818→  5902→  Performance Budget P95 < 600ms
+   819→  5903→  -----------------------------------------------------------------------
+   820→  5904→
+   821→  5905→11.3.6 Search Endpoints
+   822→  5906→
+   823→  5907→  -----------------------------------------------------------------------
+   824→  5908→  ⚠ BLOCKED: CONFLICT-007 (federated search ranking: single Algolia index
+   825→  5909→  vs. multi-index merge) must be resolved before the Algolia index schema
+   826→  5910→  is finalized. The endpoint contracts below are stable; the backing
+   827→  5911→  implementation detail (how results are assembled) depends on that
+   828→  5912→  resolution.
+   829→  5913→
+   830→  5914→  -----------------------------------------------------------------------
+   831→  5915→
+   832→  5916→GET /api/v1/search
+   833→  5917→
+   834→  5918→  -----------------------------------------------------------------------
+   835→  5919→  Field              Value
+   836→  5920→  ------------------ ----------------------------------------------------
+   837→  5921→  Method             GET
+   838→  5922→
+   839→  5923→  Route              /api/v1/search
+   840→  5924→
+   841→  5925→  Purpose            Primary full-text + faceted search across all
+   842→  5926→                     published InventoryItems
+   843→  5927→
+   844→  5928→  Auth               Optional
+   845→  5929→
+   846→  5930→  Rate Limit         300 / minute / IP
+   847→  5931→
+   848→  5932→  Required Query     q: string (1–200 chars) AND (location_id: uuid OR
+   849→  5933→  Params             (lat: float, lng: float, radius_km: integer))
+   850→  5934→
+   851→  5935→  Optional Query     category: inventory_category[]; price_min_cents;
+   852→  5936→  Params             price_max_cents; date_from; date_to; attendees:
+   853→  5937→                     integer; sort: 'relevance' | 'price_asc' |
+   854→  5938→                     'price_desc' | 'newest' | 'distance'; page; per_page
+   855→  5939→                     (max 48)
+   856→  5940→
+   857→  5941→  Output Schema      { data: { hits: [{ item_id, title, category,
+   858→  5942→                     price_cents, location, distance_km, score, media:
+   859→  5943→                     [url] }], facets: { category: {[key]: count},
+   860→  5944→                     price_range: {...} }, total_hits, page, per_page,
+   861→  5945→                     query_id: string } }
+   862→  5946→
+   863→  5947→  Fallback Behavior  If Algolia unavailable: fall back to Postgres
+   864→  5948→                     pg_trgm full-text search; response includes
+   865→  5949→                     meta.degraded_mode: true
+   866→  5950→
+   867→  5951→  Error Codes        400 QUERY_TOO_SHORT; 400 LOCATION_REQUIRED
+   868→  5952→
+   869→  5953→  Performance Budget P95 < 150ms (Algolia); < 1500ms (DB fallback)
+   870→  5954→  -----------------------------------------------------------------------
+   871→  5955→
+   872→  5956→GET /api/v1/search/autocomplete
+   873→  5957→
+   874→  5958→  -----------------------------------------------------------------------
+   875→  5959→  Field              Value
+   876→  5960→  ------------------ ----------------------------------------------------
+   877→  5961→  Method             GET
+   878→  5962→
+   879→  5963→  Route              /api/v1/search/autocomplete
+   880→  5964→
+   881→  5965→  Purpose            Returns autocomplete suggestions for the Plan bar
+   882→  5966→                     What field
+   883→  5967→
+   884→  5968→  Auth               Optional
+   885→  5969→
+   886→  5970→  Rate Limit         600 / minute / IP (high-frequency; called on
+   887→  5971→                     keypress)
+   888→  5972→
+   889→  5973→  Query Params       q: string (min 2 chars); category?:
+   890→  5974→                     inventory_category; location_id?: uuid
+   891→  5975→
+   892→  5976→  Output Schema      { data: { suggestions: [{ text: string, type:
+   893→  5977→                     'category' | 'query' | 'item', category?:
+   894→  5978→                     inventory_category }] } }
+   895→  5979→
+   896→  5980→  Caching            Results for q >= 4 chars cached at Edge for 300s
+   897→  5981→
+   898→  5982→  Performance Budget P99 < 80ms
+   899→  5983→  -----------------------------------------------------------------------
+   900→  5984→
+   901→  5985→11.3.7 Vendor Endpoints
+   902→  5986→
+   903→  5987→Vendor endpoints cover account management, claim flow, staff management,
+   904→  5988→and onboarding. Booking dashboards are covered under Reservation
+   905→  5989→endpoints with vendor-scoped RLS.
+   906→  5990→
+   907→  5991→POST /api/v1/vendors/claim
+   908→  5992→
+   909→  5993→  -----------------------------------------------------------------------
+   910→  5994→  Field              Value
+   911→  5995→  ------------------ ----------------------------------------------------
+   912→  5996→  Method             POST
+   913→  5997→
+   914→  5998→  Route              /api/v1/vendors/claim
+   915→  5999→
+   916→  6000→  Purpose            Initiates the claim flow for a seeded VendorAccount
+   917→  6001→                     listing
+   918→  6002→
+   919→  6003→  Auth               Authenticated JWT (any registered user)
+   920→  6004→
+   921→  6005→  Input Schema       { vendor_id: uuid; verification_method: 'email' |
+   922→  6006→                     'phone'; contact_value: string }
+   923→  6007→
+   924→  6008→  Business Rules     BR-V-003: claiming requires identity verification. A
+   925→  6009→                     verification code is sent to contact_value. The
+   926→  6010→                     vendor_id must currently be in SEEDED status.
+   927→  6011→
+   928→  6012→  Output Schema      { data: { claim_token: string (expires 10 min);
+   929→  6013→                     message: 'Verification code sent' } }
+   930→  6014→
+   931→  6015→  Side Effects       Sends verification code via email/SMS; claim_token
+   932→  6016→                     stored server-side for 10 min
+   933→  6017→
+   934→  6018→  Error Codes        409 ALREADY_CLAIMED; 400 INVALID_CONTACT; 404
+   935→  6019→                     VENDOR_NOT_FOUND
+   936→  6020→
+   937→  6021→  Performance Budget P95 < 800ms
+   938→  6022→  -----------------------------------------------------------------------
+   939→  6023→
+   940→  6024→POST /api/v1/vendors/claim/verify
+   941→  6025→
+   942→  6026→  -----------------------------------------------------------------------
+   943→  6027→  Field              Value
+   944→  6028→  ------------------ ----------------------------------------------------
+   945→  6029→  Method             POST
+   946→  6030→
+   947→  6031→  Route              /api/v1/vendors/claim/verify
+   948→  6032→
+   949→  6033→  Purpose            Completes claim flow by verifying the code; creates
+   950→  6034→                     VendorAccount ownership link
+   951→  6035→
+   952→  6036→  Auth               Authenticated JWT
+   953→  6037→
+   954→  6038→  Input Schema       { claim_token: string; verification_code: string }
+   955→  6039→
+   956→  6040→  Output Schema      { data: { vendor_id, status: 'CLAIMED',
+   957→  6041→                     vendor_portal_url: string } }
+   958→  6042→
+   959→  6043→  Side Effects       FSM: SEEDED → CLAIMED; VendorStaff row created (user
+   960→  6044→                     → OWNER); vendor.claimed event emitted; onboarding
+   961→  6045→                     email sent
+   962→  6046→
+   963→  6047→  Error Codes        400 INVALID_CODE; 400 CLAIM_TOKEN_EXPIRED; 409
+   964→  6048→                     ALREADY_CLAIMED
+   965→  6049→
+   966→  6050→  Performance Budget P95 < 500ms
+   967→  6051→  -----------------------------------------------------------------------
+   968→  6052→
+   969→  6053→POST /api/v1/vendors/:vendor_id/staff
+   970→  6054→
+   971→  6055→  -----------------------------------------------------------------------
+   972→  6056→  Field              Value
+   973→  6057→  ------------------ ----------------------------------------------------
+   974→  6058→  Method             POST
+   975→  6059→
+   976→  6060→  Route              /api/v1/vendors/:vendor_id/staff
+   977→  6061→
+   978→  6062→  Purpose            Invites a user to join a VendorAccount as staff
+   979→  6063→
+   980→  6064→  Auth               VENDOR_OWNER of the specified vendor_id
+   981→  6065→
+   982→  6066→  Input Schema       { email: string; role: 'VENDOR_MANAGER' |
+   983→  6067→                     'VENDOR_STAFF' }
+   984→  6068→
+   985→  6069→  Business Rules     BR-V-002: a user may hold at most one role per
+   986→  6070→                     VendorAccount. Invited user must have an existing
+   987→  6071→                     platform account.
+   988→  6072→
+   989→  6073→  Output Schema      { data: { invitation_id: uuid, email, role, status:
+   990→  6074→                     'PENDING' } }
+   991→  6075→
+   992→  6076→  Side Effects       Sends staff invitation email; emits
+   993→  6077→                     vendor.staff_invited analytics event
+   994→  6078→
+   995→  6079→  Error Codes        409 ALREADY_A_MEMBER; 404 USER_NOT_FOUND; 403
+   996→  6080→                     NOT_VENDOR_OWNER
+   997→  6081→
+   998→  6082→  Performance Budget P95 < 600ms
+   999→  6083→  -----------------------------------------------------------------------
+  1000→  6084→
+  1001→  6085→11.3.8 Event (Ticketed) Endpoints
+  1002→  6086→
+  1003→  6087→These endpoints manage the ticketed Event lifecycle (DOM-007), built on
+  1004→  6088→the Hi.Events-derived model. An Event is also an InventoryItem
+  1005→  6089→(category=EVENT_TICKET), so inventory CRUD endpoints apply for basic
+  1006→  6090→fields; these endpoints handle the Event-specific layers.
+  1007→  6091→
+  1008→  6092→POST /api/v1/events/:event_id/ticket-tiers
+  1009→  6093→
+  1010→  6094→  -----------------------------------------------------------------------
+  1011→  6095→  Field              Value
+  1012→  6096→  ------------------ ----------------------------------------------------
+  1013→  6097→  Method             POST
+  1014→  6098→
+  1015→  6099→  Route              /api/v1/events/:event_id/ticket-tiers
+  1016→  6100→
+  1017→  6101→  Purpose            Adds a ticket tier to an existing Event
+  1018→  6102→
+  1019→  6103→  Auth               VENDOR_OWNER or VENDOR_MANAGER of the event's
+  1020→  6104→                     VendorAccount
+  1021→  6105→
+  1022→  6106→  Input Schema       { name: string; type: ticket_tier_type; price_cents:
+  1023→  6107→                     integer >= 0; is_free?: boolean; capacity: integer;
+  1024→  6108→                     sales_start_at?: ISO8601; sales_end_at?: ISO8601;
+  1025→  6109→                     min_per_order?: integer; max_per_order?: integer;
+  1026→  6110→                     is_hidden?: boolean }
+  1027→  6111→
+  1028→  6112→  Validation         BR-EV-007; BR-EV-008. sales_end_at <= event
+  1029→  6113→                     starts_at.
+  1030→  6114→
+  1031→  6115→  Output Schema      { data: { tier_id: uuid, ...fields } }
+  1032→  6116→
+  1033→  6117→  Error Codes        400 INVALID_TIER_TYPE; 400 INVALID_SALES_WINDOW; 409
+  1034→  6118→                     EVENT_SOLD_OUT (capacity already exceeded)
+  1035→  6119→
+  1036→  6120→  Performance Budget P95 < 400ms
+  1037→  6121→  -----------------------------------------------------------------------
+  1038→  6122→
+  1039→  6123→POST /api/v1/events/:event_id/checkin
+  1040→  6124→
+  1041→  6125→  -----------------------------------------------------------------------
+  1042→  6126→  Field              Value
+  1043→  6127→  ------------------ ----------------------------------------------------
+  1044→  6128→  Method             POST
+  1045→  6129→
+  1046→  6130→  Route              /api/v1/events/:event_id/checkin
+  1047→  6131→
+  1048→  6132→  Purpose            Validates a QR check-in token and records check-in
+  1049→  6133→                     for a ticket Reservation
+  1050→  6134→
+  1051→  6135→  Auth               VENDOR_OWNER, VENDOR_MANAGER, or VENDOR_STAFF of the
+  1052→  6136→                     event's VendorAccount
+  1053→  6137→
+  1054→  6138→  Input Schema       { qr_token: string; method?: 'QR_SCAN' | 'MANUAL' }
+  1055→  6139→
+  1056→  6140→  Business Rules     BR-EV-004: duplicate check-in returns error with
+  1057→  6141→                     prior timestamp. BR-EV-005: check-in window
+  1058→  6142→                     enforced.
+  1059→  6143→
+  1060→  6144→  QR Token           HMAC-SHA256 verify(token, reservation_id + user_id +
+  1061→  6145→  Validation         event_id + platform_secret). Reject if signature
+  1062→  6146→                     invalid or token expired (TTL: event_end_at + 30
+  1063→  6147→                     min).
+  1064→  6148→
+  1065→  6149→  Output Schema      { data: { reservation_id, attendee_name: string,
+  1066→  6150→                     tier_name: string, checked_in_at: iso8601 } }
+  1067→  6151→
+  1068→  6152→  Error Codes        400 INVALID_QR_TOKEN; 409 ALREADY_CHECKED_IN (with
+  1069→  6153→                     checked_in_at); 409 OUTSIDE_CHECKIN_WINDOW
+  1070→  6154→
+  1071→  6155→  Performance Budget P99 < 300ms (high-frequency; multiple scanners
+  1072→  6156→                     simultaneously)
+  1073→  6157→  -----------------------------------------------------------------------
+  1074→  6158→
+  1075→  6159→11.3.9 Inbound Webhook Endpoints
+  1076→  6160→
+  1077→  6161→Inbound webhooks are handled by Supabase Edge Functions (see Part XII),
+  1078→  6162→not Next.js route handlers. They are documented here for API surface
+  1079→  6163→completeness.
+  1080→  6164→
+  1081→  6165→  -----------------------------------------------------------------------------------------------------
+  1082→  6166→  Route                             Source          Auth Method        Purpose
+  1083→  6167→  --------------------------------- --------------- ------------------ --------------------------------
+  1084→  6168→  POST /functions/v1/stripe-webhook Stripe          Stripe-Signature   Handles
+  1085→  6169→                                                    HMAC verification  payment_intent.succeeded,
+  1086→  6170→                                                                       payment_intent.payment_failed,
+  1087→  6171→                                                                       transfer.created,
+  1088→  6172→                                                                       refund.created, account.updated
+  1089→  6173→                                                                       (Stripe Connect)
+  1090→  6174→
+  1091→  6175→  POST /functions/v1/search-ingest  Internal        Supabase           Triggered by DB trigger on
+  1092→  6176→                                    (inventory      service_role key   inventory_items changes; pushes
+  1093→  6177→                                    change trigger)                    document to Algolia
+  1094→  6178→
+  1095→  6179→  POST                              Internal        Supabase           Dequeues and delivers
+  1096→  6180→  /functions/v1/notification-send   (notification   service_role key   notifications via Resend (email)
+  1097→  6181→                                    queue)                             or Web Push API
+  1098→  6182→
+  1099→  6183→  POST /functions/v1/booking-ttl    pg_cron         Supabase           Runs TTL sweep: expires PENDING
+  1100→  6184→                                    (scheduled)     service_role key   Reservations past expires_at;
+  1101→  6185→                                                                       releases inventory
+  1102→  6186→  -----------------------------------------------------------------------------------------------------
+  1103→  6187→
+  1104→  6188→11.3.10 Rate Limit Summary
+  1105→  6189→
+  1106→  6190→  ----------------------------------------------------------------------------
+  1107→  6191→  Endpoint Group            Limit      Window     Scope        Burst Allowed
+  1108→  6192→  ------------------------- ---------- ---------- ------------ ---------------
+  1109→  6193→  Search (/api/v1/search)   300 req    1 min      per IP       Yes — burst to
+  1110→  6194→                                                               500 for 10s
+  1111→  6195→
+  1112→  6196→  Autocomplete              600 req    1 min      per IP       Yes — burst to
+  1113→  6197→                                                               1000 for 5s
+  1114→  6198→
+  1115→  6199→  Catalog browse            300 req    1 min      per IP       No
+  1116→  6200→  (/api/v1/inventory)                                          
+  1117→  6201→
+  1118→  6202→  Auth endpoints            10 req     1 hour     per IP       No
+  1119→  6203→
+  1120→  6204→  Checkout                  20 req     1 hour     per user     No
+  1121→  6205→  (/api/v1/cart/checkout)                                      
+  1122→  6206→
+  1123→  6207→  Inventory write           60 req     1 hour     per vendor   No
+  1124→  6208→  (POST/PATCH/DELETE)                                          
+  1125→  6209→
+  1126→  6210→  Check-in endpoint         600 req    1 min      per vendor   Yes — scanning
+  1127→  6211→                                                               scenarios
+  1128→  6212→
+  1129→  6213→  All other authenticated   120 req    1 min      per user     No
+  1130→  6214→  ----------------------------------------------------------------------------
+  1131→  6215→
+  1132→  6216→PART XII — Edge Functions
+  1133→  6217→
+  1134→  6218→Edge Functions are Supabase Deno serverless functions deployed at the
+  1135→  6219→network edge. They handle three categories of work: inbound webhooks
+  1136→  6220→from external providers, async triggers fired by database events (via
+  1137→  6221→pg_notify / Supabase Realtime), and scheduled jobs invoked by pg_cron.
+  1138→  6222→Every Edge Function has a deterministic contract: idempotency, retry
+  1139→  6223→behavior, dead-letter handling, and observability are specified for
+  1140→  6224→each.
+  1141→  6225→
+  1142→  6226→12.1 Edge Function Standards
+  1143→  6227→
+  1144→  6228→The following requirements apply to every Edge Function regardless of
+  1145→  6229→purpose:
+  1146→  6230→
+  1147→  6231→-   Idempotency: every function must be safe to call multiple times with
+  1148→  6232→    the same payload. Use event_id or webhook_id as an idempotency key
+  1149→  6233→    stored in a processed_events table.
+  1150→  6234→
+  1151→  6235→-   Retries: all functions are invoked by Supabase's built-in retry
+  1152→  6236→    mechanism (3 attempts, exponential backoff: 5s, 25s, 125s).
+  1153→  6237→
+  1154→  6238→-   Dead-Letter: after 3 failed attempts, payload is written to
+  1155→  6239→    dead_letter_queue table with failure_reason, attempted_at[], and
+  1156→  6240→    requires manual review.
+  1157→  6241→
+  1158→  6242→-   Timeouts: default Deno function timeout is 150s. Functions that may
+  1159→  6243→    exceed 60s must checkpoint progress and be resumable.
+  1160→  6244→
+  1161→  6245→-   Environment Variables: accessed via Deno.env.get(). No secrets in
+  1162→  6246→    source code. All required env vars listed per function.
+  1163→  6247→
+  1164→  6248→-   Logging: structured JSON logs. Every log entry includes:
+  1165→  6249→    function_name, invocation_id, event_id (if applicable), duration_ms,
+  1166→  6250→    status ('success' | 'failure' | 'skipped').
+  1167→  6251→
+  1168→  6252→-   Tracing: emit span to observability provider (Part XXIX) wrapping
+  1169→  6253→    the full function execution.
+  1170→  6254→
+  1171→  6255→12.2 functions/stripe-webhook
+  1172→  6256→
+  1173→  6257→  -----------------------------------------------------------------------
+  1174→  6258→  Field              Value
+  1175→  6259→  ------------------ ----------------------------------------------------
+  1176→  6260→  Function Name      stripe-webhook
+  1177→  6261→
+  1178→  6262→  Trigger            POST from Stripe to /functions/v1/stripe-webhook
+  1179→  6263→
+  1180→  6264→  Auth Method        Stripe-Signature header verified with
+  1181→  6265→                     STRIPE_WEBHOOK_SECRET env var using Stripe SDK
+  1182→  6266→                     constructEvent()
+  1183→  6267→
+  1184→  6268→  Idempotency Key    event.id (Stripe event ID) stored in
+  1185→  6269→                     processed_stripe_events table. Duplicate calls
+  1186→  6270→                     return 200 immediately.
+  1187→  6271→
+  1188→  6272→  Environment        STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+  1189→  6273→  Variables          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+  1190→  6274→
+  1191→  6275→  Timeout            30s (all Stripe webhooks complete quickly)
+  1192→  6276→  -----------------------------------------------------------------------
+  1193→  6277→
+  1194→  6278→12.2.1 Handled Stripe Events
+  1195→  6279→
+  1196→  6280→  --------------------------------------------------------------------------------------------------------------------
+  1197→  6281→  Stripe Event                    Platform Action                                    FSM          Failure Behavior
+  1198→  6282→                                                                                     Transition   
+  1199→  6283→  ------------------------------- -------------------------------------------------- ------------ --------------------
+  1200→  6284→  payment_intent.succeeded        Find Reservation by stripe_payment_intent_id; call PENDING →    Write to
+  1201→
+  1202→[showing lines 5085-6284 of 38573; use offset=6285 with limit to continue reading]
