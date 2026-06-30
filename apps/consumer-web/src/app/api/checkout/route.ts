@@ -22,7 +22,12 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { cart_items, trip_id } = body as { cart_items: CartItem[]; trip_id?: string }
+  const { cart_items, trip_id, promo_code, question_answers } = body as {
+    cart_items: CartItem[]
+    trip_id?: string
+    promo_code?: string
+    question_answers?: Array<{ question_id: string; answer: unknown }>
+  }
 
   if (!cart_items || !Array.isArray(cart_items) || cart_items.length === 0) {
     return NextResponse.json({ error: 'cart_items is required' }, { status: 400 })
@@ -137,7 +142,113 @@ export async function POST(request: NextRequest) {
     })
 
     reservations.push({ id: reservation.id, item_id: inventoryItemId, amount: totalPriceCents })
+
+    // Store question answers on the reservation metadata
+    if (question_answers && question_answers.length > 0) {
+      await supabase
+        .from('reservations')
+        .update({
+          metadata: {
+            answers: question_answers.map((qa) => ({
+              question_id: qa.question_id,
+              answer: qa.answer,
+              answered_at: new Date().toISOString(),
+            })),
+          },
+        })
+        .eq('id', reservation.id)
+    }
   }
+
+  // ─── Apply promo code if provided ───────────────────────────────────────
+  let promoDiscountCents = 0
+  let appliedPromoCode: string | null = null
+  if (promo_code && reservations.length > 0) {
+    // Load the first reservation's event to check promo codes
+    const firstItem = reservations[0]
+    const { data: event } = await supabase
+      .from('inventory_items')
+      .select('metadata')
+      .eq('id', firstItem.item_id)
+      .maybeSingle()
+
+    if (event) {
+      const meta = (event.metadata as Record<string, unknown>) ?? {}
+      const promoCodes = (meta.promo_codes as Array<Record<string, unknown>>) ?? []
+      const promo = promoCodes.find((p) => p.code === promo_code.toUpperCase())
+
+      if (promo) {
+        // Validate: not expired, under max uses
+        const isExpired = promo.expires_at && new Date(promo.expires_at as string) < new Date()
+        const maxUsesReached = promo.max_uses !== null && (promo.uses as number) >= (promo.max_uses as number)
+
+        if (!isExpired && !maxUsesReached) {
+          if (promo.discount_type === 'PERCENTAGE') {
+            promoDiscountCents = Math.round((totalAmountCents * (promo.discount_value as number)) / 100)
+          } else {
+            promoDiscountCents = promo.discount_value as number
+          }
+          appliedPromoCode = promo.code as string
+
+          // Increment usage count
+          promo.uses = ((promo.uses as number) ?? 0) + 1
+          await supabase
+            .from('inventory_items')
+            .update({ metadata: { ...meta, promo_codes: promoCodes } })
+            .eq('id', firstItem.item_id)
+
+          // Store promo on reservations
+          for (const r of reservations) {
+            await supabase
+              .from('reservations')
+              .update({
+                metadata: {
+                  promo_code: appliedPromoCode,
+                  promo_discount_cents: promoDiscountCents,
+                },
+                total_price_cents: Math.max(0, r.amount - Math.round(promoDiscountCents / reservations.length)),
+              })
+              .eq('id', r.id)
+          }
+        }
+      }
+    }
+  }
+
+  // ─── Calculate tax & fees ───────────────────────────────────────────────
+  let taxCents = 0
+  let feeCents = 0
+  if (reservations.length > 0) {
+    const firstItem = reservations[0]
+    const { data: event } = await supabase
+      .from('inventory_items')
+      .select('metadata')
+      .eq('id', firstItem.item_id)
+      .maybeSingle()
+
+    if (event) {
+      const meta = (event.metadata as Record<string, unknown>) ?? {}
+      const taxes = (meta.taxes_and_fees as Array<Record<string, unknown>>) ?? []
+      for (const t of taxes) {
+        if (!t.is_active) continue
+        if (t.type === 'TAX') {
+          if (t.calculation_type === 'PERCENTAGE') {
+            taxCents += Math.round((totalAmountCents * (t.rate as number)) / 100)
+          } else {
+            taxCents += t.rate as number
+          }
+        } else if (t.type === 'FEE') {
+          if (t.calculation_type === 'PERCENTAGE') {
+            feeCents += Math.round((totalAmountCents * (t.rate as number)) / 100)
+          } else {
+            feeCents += t.rate as number
+          }
+        }
+      }
+    }
+  }
+
+  const finalTotalCents = Math.max(0, totalAmountCents - promoDiscountCents) + taxCents + feeCents
 
   // ─── Create Stripe Checkout Session ─────────────────────────────────────
   // movinin pattern: create session with metadata, return URL
@@ -145,14 +256,14 @@ export async function POST(request: NextRequest) {
 
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
-    line_items: chargeableItems.map((item, i) => ({
+    line_items: [{
       price_data: {
         currency: 'usd',
-        product_data: { name: item.name },
-        unit_amount: Math.round(item.amount * 100),
+        product_data: { name: `Planviry Booking (${reservations.length} items)` },
+        unit_amount: finalTotalCents,
       },
-      quantity: item.quantity ?? 1,
-    })),
+      quantity: 1,
+    }],
     metadata: {
       user_id: user.id,
       reservation_ids: JSON.stringify(reservationIds),
@@ -182,10 +293,17 @@ export async function POST(request: NextRequest) {
     order_id: session.id,
     stripe_session_url: session.url,
     stripe_client_secret: session.client_secret,
-    total_amount: totalAmountCents / 100,
+    subtotal_cents: totalAmountCents,
+    promo_code: appliedPromoCode,
+    promo_discount_cents: promoDiscountCents,
+    tax_cents: taxCents,
+    fee_cents: feeCents,
+    total_amount: finalTotalCents / 100,
+    total_amount_cents: finalTotalCents,
     reservation_ids: reservationIds,
     chargeable_count: chargeableItems.length,
     non_chargeable_processed: nonChargeableResults,
+    question_answers_stored: question_answers?.length ?? 0,
     expires_at: ttlExpiresAt,
     message: 'PENDING reservations created. Redirect to stripe_session_url to complete payment.',
   })
