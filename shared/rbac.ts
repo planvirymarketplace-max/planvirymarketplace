@@ -1,0 +1,183 @@
+/**
+ * Peppermint adaptation — RBAC permission model.
+ * Role-based access control with permission inheritance from roles.
+ * Adapted from Peppermint apps/api/src/lib/roles.ts + permissions.ts.
+ *
+ * Spec ref: Part XLII §42.3 — RBAC / permissions model: Winning Reference: Peppermint
+ */
+
+import { supabase } from "@planviry/db";
+
+// Permission types (adapted from Peppermint's Permission union type)
+export type PlanviryPermission =
+  // Inventory permissions
+  | 'inventory::create' | 'inventory::read' | 'inventory::update' | 'inventory::delete' | 'inventory::publish'
+  // Reservation permissions
+  | 'reservation::read' | 'reservation::cancel' | 'reservation::refund' | 'reservation::complete'
+  // Vendor permissions
+  | 'vendor::create' | 'vendor::read' | 'vendor::update' | 'vendor::claim' | 'vendor::manage_staff'
+  // Event permissions
+  | 'event::create' | 'event::update' | 'event::checkin' | 'event::duplicate'
+  // Ticket permissions
+  | 'ticket::purchase' | 'ticket::verify' | 'ticket::manage_tiers'
+  // User permissions
+  | 'user::read' | 'user::update' | 'user::delete' | 'user::manage'
+  // Moderation
+  | 'moderation::read' | 'moderation::act' | 'moderation::appeal'
+  // Reports
+  | 'report::read' | 'report::export'
+  // Settings
+  | 'settings::manage' | 'webhook::manage'
+  // Admin
+  | 'admin::panel' | 'admin::impersonate';
+
+// Role → permission mapping
+const ROLE_PERMISSIONS: Record<string, PlanviryPermission[]> = {
+  CONSUMER: [
+    'inventory::read', 'reservation::read', 'ticket::purchase',
+    'vendor::read', 'event::create', 'user::read', 'user::update',
+    'moderation::appeal',
+  ],
+  VENDOR_OWNER: [
+    'inventory::create', 'inventory::read', 'inventory::update', 'inventory::delete', 'inventory::publish',
+    'reservation::read', 'reservation::cancel', 'reservation::refund', 'reservation::complete',
+    'vendor::read', 'vendor::update', 'vendor::manage_staff',
+    'event::create', 'event::update', 'event::checkin', 'event::duplicate',
+    'ticket::manage_tiers', 'ticket::verify',
+    'user::read', 'report::read', 'report::export',
+    'webhook::manage',
+  ],
+  VENDOR_MANAGER: [
+    'inventory::read', 'inventory::update',
+    'reservation::read', 'reservation::cancel',
+    'vendor::read',
+    'event::update', 'event::checkin',
+    'ticket::verify', 'ticket::manage_tiers',
+    'report::read',
+  ],
+  VENDOR_STAFF: [
+    'inventory::read', 'reservation::read',
+    'event::checkin', 'ticket::verify',
+  ],
+  MODERATOR: [
+    'inventory::read', 'reservation::read', 'vendor::read',
+    'moderation::read', 'moderation::act',
+    'report::read',
+    'user::read',
+  ],
+  ADMIN: [
+    // Admin has all permissions
+    'inventory::create', 'inventory::read', 'inventory::update', 'inventory::delete', 'inventory::publish',
+    'reservation::read', 'reservation::cancel', 'reservation::refund', 'reservation::complete',
+    'vendor::create', 'vendor::read', 'vendor::update', 'vendor::claim', 'vendor::manage_staff',
+    'event::create', 'event::update', 'event::checkin', 'event::duplicate',
+    'ticket::purchase', 'ticket::verify', 'ticket::manage_tiers',
+    'user::read', 'user::update', 'user::delete', 'user::manage',
+    'moderation::read', 'moderation::act', 'moderation::appeal',
+    'report::read', 'report::export',
+    'settings::manage', 'webhook::manage',
+    'admin::panel', 'admin::impersonate',
+  ],
+};
+
+/**
+ * Check if a user has a permission.
+ * Adapted from Peppermint's hasPermission().
+ */
+export function hasPermission(
+  role: string,
+  requiredPermission: PlanviryPermission,
+): boolean {
+  const permissions = ROLE_PERMISSIONS[role] ?? [];
+  return permissions.includes(requiredPermission);
+}
+
+/**
+ * Check if user has ALL of the required permissions.
+ */
+export function hasAllPermissions(
+  role: string,
+  requiredPermissions: PlanviryPermission[],
+): boolean {
+  return requiredPermissions.every(p => hasPermission(role, p));
+}
+
+/**
+ * Check if user has ANY of the required permissions.
+ */
+export function hasAnyPermission(
+  role: string,
+  requiredPermissions: PlanviryPermission[],
+): boolean {
+  return requiredPermissions.some(p => hasPermission(role, p));
+}
+
+/**
+ * Get all permissions for a role.
+ */
+export function getPermissionsForRole(role: string): PlanviryPermission[] {
+  return ROLE_PERMISSIONS[role] ?? [];
+}
+
+/**
+ * Middleware helper: require a permission for a route.
+ * Returns the user's role if authorized, or null if not.
+ */
+export async function requirePermission(
+  auth: { userId: string | null; role: string; vendorId: string | null; vendorRole: string | null },
+  permission: PlanviryPermission,
+): Promise<boolean> {
+  // Admin has all permissions (Peppermint pattern)
+  if (auth.role === 'ADMIN') return true;
+
+  // Check platform role
+  if (hasPermission(auth.role, permission)) return true;
+
+  // Check vendor role (for vendor-scoped permissions)
+  if (auth.vendorRole && hasPermission(auth.vendorRole, permission)) return true;
+
+  return false;
+}
+
+/**
+ * Notification fan-out (Peppermint pattern).
+ * Creates notification rows for all users who should be notified of an event.
+ */
+export async function fanOutNotification(
+  eventType: string,
+  entity_type: string,
+  entity_id: string,
+  recipientUserIds: string[],
+  subject: string,
+  body: string,
+  priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' = 'MEDIUM',
+  channels: Array<'IN_APP' | 'EMAIL' | 'PUSH'> = ['IN_APP', 'EMAIL'],
+): Promise<number> {
+  const rows = recipientUserIds.flatMap(userId =>
+    channels.map(channel => ({
+      user_id: userId,
+      notification_type: eventType,
+      channel,
+      priority,
+      subject,
+      body,
+      data_payload: { entity_type, entity_id },
+      status: 'QUEUED',
+      rate_limit_category: priority === 'CRITICAL' ? 'CRITICAL' : 'NON_CRITICAL',
+    })),
+  );
+
+  if (rows.length === 0) return 0;
+
+  const { data, error } = await supabase
+    .from('notifications')
+    .insert(rows)
+    .select('id');
+
+  if (error) {
+    console.error('[fanOutNotification] insert failed:', error.message);
+    return 0;
+  }
+
+  return data?.length ?? 0;
+}

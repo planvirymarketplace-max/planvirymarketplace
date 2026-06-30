@@ -151,6 +151,54 @@ export async function POST(request: NextRequest) {
               .eq('status', 'PENDING')
           } else {
             console.log(`[stripe-webhook] confirmed reservation ${reservationId}`)
+
+          // ─── Fan-out notifications (Peppermint pattern) ─────────────────────
+          // Notify the user (reservation confirmed) + vendor staff (new booking)
+          const { data: resForNotif } = await supabase
+            .from('reservations')
+            .select('user_id, vendor_id, inventory_items!inner(title)')
+            .eq('id', reservationId)
+            .maybeSingle()
+
+          if (resForNotif) {
+            const eventTitle = Array.isArray(resForNotif.inventory_items) ? resForNotif.inventory_items[0]?.title : resForNotif.inventory_items?.title
+
+            // Notify user
+            await supabase.from('notifications').insert({
+              user_id: resForNotif.user_id,
+              notification_type: 'reservation.confirmed',
+              channel: 'EMAIL',
+              priority: 'HIGH',
+              subject: `Booking confirmed: ${eventTitle ?? 'Your event'}`,
+              body: `Your reservation has been confirmed. Reservation ID: ${reservationId}. Event: ${eventTitle ?? 'N/A'}.`,
+              data_payload: { reservation_id: reservationId, event_title: eventTitle },
+              status: 'QUEUED',
+              rate_limit_category: 'NON_CRITICAL',
+            })
+
+            // Notify vendor staff
+            const { data: staff } = await supabase
+              .from('vendor_staff')
+              .select('user_id')
+              .eq('vendor_id', resForNotif.vendor_id)
+              .eq('status', 'ACTIVE')
+
+            if (staff && staff.length > 0) {
+              await supabase.from('notifications').insert(
+                staff.map((s: { user_id: string }) => ({
+                  user_id: s.user_id,
+                  notification_type: 'vendor.new_booking',
+                  channel: 'IN_APP',
+                  priority: 'HIGH',
+                  subject: `New booking: ${eventTitle ?? 'New reservation'}`,
+                  body: `A new booking has been confirmed. Reservation ID: ${reservationId}.`,
+                  data_payload: { reservation_id: reservationId, event_title: eventTitle },
+                  status: 'QUEUED',
+                  rate_limit_category: 'NON_CRITICAL',
+                })),
+              )
+            }
+          }
           }
 
           // ─── Create per-attendee ticket_instances (Hi.Events pattern) ──────
