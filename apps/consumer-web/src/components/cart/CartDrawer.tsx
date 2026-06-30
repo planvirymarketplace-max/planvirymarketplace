@@ -28,13 +28,34 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
         body: JSON.stringify({ cart_items: items }),
       })
       const data = await response.json()
+
+      if (!response.ok) {
+        console.error('Checkout failed:', data.error)
+        alert(data.error || 'Checkout failed. Please try again.')
+        return
+      }
+
+      // If Stripe Checkout URL is returned, redirect to Stripe (movinin pattern)
+      if (data.stripe_session_url) {
+        clearCart()
+        window.location.href = data.stripe_session_url
+        return
+      }
+
+      // If only non-chargeable items, go to success page
+      if (data.non_chargeable_processed) {
+        router.push(`/checkout?order=${data.order_id || 'no-charge'}&status=success`)
+        onClose()
+        return
+      }
+
+      // Fallback: go to checkout review page
       if (data.order_id) {
         router.push(`/checkout?order=${data.order_id}`)
-      } else if (data.non_chargeable_processed) {
-        onClose()
       }
     } catch (err) {
       console.error('Checkout failed:', err)
+      alert('Checkout failed. Please check your connection and try again.')
     } finally {
       setCheckingOut(false)
     }

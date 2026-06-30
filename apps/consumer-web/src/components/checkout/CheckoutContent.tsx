@@ -11,20 +11,101 @@ export function CheckoutContent() {
   const router = useRouter()
   const { items, chargeableItems, nonChargeableItems, totalAmount, totalDeposit, clearCart } = useCart()
   const orderId = searchParams.get('order')
-  const [status, setStatus] = useState<'review' | 'processing' | 'success'>('review')
+  const sessionId = searchParams.get('session_id')
+  const successParam = searchParams.get('status')
+  const [status, setStatus] = useState<'review' | 'processing' | 'success' | 'failed'>('review')
+  const [reservationIds, setReservationIds] = useState<string[]>([])
 
+  // If returning from Stripe Checkout (session_id in URL), verify payment status
   useEffect(() => {
-    if (orderId) {
-      setStatus('review')
-    }
-  }, [orderId])
+    if (sessionId) {
+      setStatus('processing')
+      // Poll the backend to verify the Stripe webhook confirmed the reservations
+      // The webhook calls rpc_confirm_reservation on checkout.session.completed
+      const verifyInterval = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/checkout/verify?session_id=${sessionId}`)
+          if (res.ok) {
+            const data = await res.json()
+            if (data.status === 'CONFIRMED') {
+              setStatus('success')
+              setReservationIds(data.reservation_ids || [])
+              clearCart()
+              clearInterval(verifyInterval)
+            } else if (data.status === 'FAILED') {
+              setStatus('failed')
+              clearInterval(verifyInterval)
+            }
+          }
+        } catch (err) {
+          console.error('Verification poll failed:', err)
+        }
+      }, 3000) // poll every 3s
 
-  const handleConfirm = async () => {
-    setStatus('processing')
-    setTimeout(() => {
+      // Timeout after 60s
+      setTimeout(() => clearInterval(verifyInterval), 60000)
+      return () => clearInterval(verifyInterval)
+    }
+
+    // If returning with status=success (non-chargeable items only)
+    if (successParam === 'success') {
       setStatus('success')
       clearCart()
-    }, 2000)
+    }
+  }, [sessionId, successParam, clearCart])
+
+  // Trigger checkout — calls /api/checkout which creates PENDING reservations
+  // and returns a Stripe Checkout URL
+  const handleConfirm = async () => {
+    setStatus('processing')
+    try {
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cart_items: items }),
+      })
+      const data = await response.json()
+
+      if (!response.ok) {
+        console.error('Checkout failed:', data.error)
+        setStatus('failed')
+        return
+      }
+
+      // Redirect to Stripe Checkout (movinin pattern)
+      if (data.stripe_session_url) {
+        clearCart()
+        window.location.href = data.stripe_session_url
+        return
+      }
+
+      // Non-chargeable only — success
+      if (data.non_chargeable_processed) {
+        setStatus('success')
+        clearCart()
+      }
+    } catch (err) {
+      console.error('Checkout failed:', err)
+      setStatus('failed')
+    }
+  }
+
+  if (status === 'failed') {
+    return (
+      <div className="bg-white min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md text-center">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <span className="text-red-500 text-3xl">✕</span>
+          </div>
+          <h1 className="text-3xl font-black text-black tracking-tight font-display">Payment Failed</h1>
+          <p className="mt-3 text-sm text-gray-500">Your payment could not be processed. No charges were made.</p>
+          <div className="mt-8 space-y-3">
+            <button onClick={() => setStatus('review')} className="block w-full bg-black text-white font-bold py-3.5 rounded-xl hover:bg-coral transition-colors text-sm uppercase tracking-wider">Try Again</button>
+            <Link href="/cart" className="block w-full border border-black text-black font-bold py-3.5 rounded-xl hover:bg-black hover:text-white transition-colors text-sm uppercase tracking-wider">Back to Cart</Link>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (status === 'success') {
@@ -32,9 +113,12 @@ export function CheckoutContent() {
       <div className="bg-white min-h-screen flex items-center justify-center px-4">
         <div className="max-w-md text-center">
           <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-6" />
-          <h1 className="text-3xl font-black text-black tracking-tight font-display">Order Confirmed!</h1>
-          <p className="mt-3 text-sm text-gray-500">Your order has been placed. You will receive a confirmation email shortly.</p>
+          <h1 className="text-3xl font-black text-black tracking-tight font-display">Reservations Confirmed!</h1>
+          <p className="mt-3 text-sm text-gray-500">Your payment was processed and your reservations are confirmed. You will receive a confirmation email shortly.</p>
           {orderId && <p className="mt-2 text-xs text-gray-400">Order ID: {orderId}</p>}
+          {reservationIds.length > 0 && (
+            <p className="mt-1 text-xs text-gray-400">Reservations: {reservationIds.length} item(s)</p>
+          )}
           <div className="mt-8 space-y-3">
             <Link href="/portal" className="block w-full bg-black text-white font-bold py-3.5 rounded-xl hover:bg-coral transition-colors text-sm uppercase tracking-wider">Go to Dashboard</Link>
             <Link href="/" className="block w-full border border-black text-black font-bold py-3.5 rounded-xl hover:bg-black hover:text-white transition-colors text-sm uppercase tracking-wider">Continue Browsing</Link>
