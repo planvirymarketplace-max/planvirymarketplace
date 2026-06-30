@@ -1,0 +1,21 @@
+{
+  "_comment": "Stub taxonomy_filters.json — the full filter taxonomy is loaded from Supabase taxonomy_nodes table at runtime. This file provides static fallback shape for components that import it directly.",
+  "venues": {
+    "filters": [
+      { "key": "venue_type", "label": "Venue Type", "type": "select", "options": ["ballroom", "outdoor", "loft", "garden", "historic"] },
+      { "key": "capacity", "label": "Capacity", "type": "range", "min": 0, "max": 1000 }
+    ]
+  },
+  "restaurants": {
+    "filters": [
+      { "key": "cuisine", "label": "Cuisine", "type": "select", "options": ["italian", "american", "asian", "french", "mexican"] },
+      { "key": "price_range", "label": "Price Range", "type": "select", "options": ["$", "$$", "$$$", "$$$$"] }
+    ]
+  },
+  "hotels": {
+    "filters": [
+      { "key": "star_rating", "label": "Star Rating", "type": "select", "options": ["3", "4", "5"] },
+      { "key": "amenities", "label": "Amenities", "type": "multiselect", "options": ["pool", "gym", "spa", "restaurant", "bar"] }
+    ]
+  }
+}

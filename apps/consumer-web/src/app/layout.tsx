@@ -1,25 +1,24 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Toaster } from "@/components/ui/sonner";
+import { ThemeProvider } from "next-themes";
+import { CartProvider } from "@/lib/cart-context";
+import { AppProvider } from "@/context/AppContext";
+import { LocationProvider } from "@/components/providers/LocationProvider";
 import "./globals.css";
-import { Toaster } from "@/components/ui/toaster";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
-  title: "Planviry — Monorepo Scaffold (Parts 0–3)",
-  description: "Planviry multi-vertical occasion orchestration platform. Monorepo scaffold per Implementation Specification Parts 0–3.",
-  keywords: ["Planviry", "monorepo", "turborepo", "Next.js", "Supabase", "orchestrator"],
-  authors: [{ name: "Planviry Product & Engineering" }],
-  icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+  title: "Planviry — Orchestrate Your Perfect Occasion",
+  description:
+    "The first platform with a cart and itinerary aware of every vertical at once. Lodging, dining, tickets, venues, vendors, and experiences — in one timeline, one cart, one platform.",
+  authors: [{ name: "Planviry" }],
+  openGraph: {
+    title: "Planviry — Orchestrate Your Perfect Occasion",
+    description:
+      "The first platform with a cart and itinerary aware of every vertical at once. Lodging, dining, tickets, venues, vendors, and experiences — in one timeline, one cart, one platform.",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
   },
 };
 
@@ -30,11 +29,22 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
-      >
-        {children}
-        <Toaster />
+      <head>
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet" />
+      </head>
+      <body className="antialiased overflow-x-hidden">
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
+          <LocationProvider>
+            <CartProvider>
+              <AppProvider>
+                <div className="min-h-screen flex flex-col">
+                  <main className="flex-1">{children}</main>
+                </div>
+                <Toaster />
+              </AppProvider>
+            </CartProvider>
+          </LocationProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
