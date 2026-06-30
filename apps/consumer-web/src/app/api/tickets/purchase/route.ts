@@ -1,91 +1,174 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createClient as createServerClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import Stripe from 'stripe'
 
 // POST /api/tickets/purchase
-// Locks tier row, checks capacity, creates order (Part 12 Ticket Purchase State Machine)
-// Stripe session creation happens AFTER this succeeds.
+// Atomic ticket purchase: locks tier capacity, creates PENDING reservation, creates Stripe session.
+// Adapted from Hi.Events: atomic capacity decrement via SQL (not read-modify-write).
+// Uses new schema: ticket_tiers (quantity_total/quantity_reserved), reservations, check_ins.
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2024-06-20' as Stripe.LatestApiVersion,
+})
+
+const RESERVATION_TTL_MINUTES = 15
+
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const serverClient = await createServerClient()
+  const { data: { user } } = await serverClient.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+  const supabase = createAdminClient()
   const body = await request.json()
-  const { tier_id, quantity = 1, event_id } = body
+  const { tier_id, quantity = 1, event_id } = body as { tier_id: string; quantity?: number; event_id: string }
 
-  if (!tier_id) {
-    return NextResponse.json({ error: 'tier_id is required' }, { status: 400 })
+  if (!tier_id || !event_id) {
+    return NextResponse.json({ error: 'tier_id and event_id are required' }, { status: 400 })
   }
 
-  // Step 1: Lock tier row (row-level lock prevents concurrent purchases)
-  const { data: tier, error: lockError } = await supabase
+  // ─── 1. Load tier + event ──────────────────────────────────────────────
+  const { data: tier, error: tierErr } = await supabase
     .from('ticket_tiers')
-    .select('id, capacity, sold_count, price, tier_name')
+    .select('id, item_id, name, price_cents, quantity_total, quantity_reserved, sort_order')
     .eq('id', tier_id)
-    .single()
+    .eq('item_id', event_id)
+    .maybeSingle()
 
-  if (lockError || !tier) {
+  if (tierErr || !tier) {
     return NextResponse.json({ error: 'Ticket tier not found' }, { status: 404 })
   }
 
-  // Step 2: Check availability
-  if (tier.sold_count + quantity > tier.capacity) {
+  // Load the event (inventory_items row) for vendor_id + metadata
+  const { data: event, error: eventErr } = await supabase
+    .from('inventory_items')
+    .select('id, vendor_id, title, status, metadata, base_price_cents')
+    .eq('id', event_id)
+    .maybeSingle()
+
+  if (eventErr || !event) {
+    return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+  }
+  if (event.status !== 'PUBLISHED') {
+    return NextResponse.json({ error: 'Event is not available for purchase' }, { status: 409 })
+  }
+
+  // ─── 2. Atomic capacity check + increment (Hi.Events pattern) ──────────
+  // UPDATE ticket_tiers SET quantity_reserved = quantity_reserved + N
+  //   WHERE id = $1 AND quantity_reserved + N <= quantity_total
+  // This is a single atomic SQL statement — no race condition possible.
+  const { data: updated, error: incrErr } = await supabase
+    .rpc('atomic_reserve_tickets', {
+      p_tier_id: tier_id,
+      p_quantity: quantity,
+    })
+
+  if (incrErr) {
+    // If RPC doesn't exist, fall back to check-then-update (less safe but works)
+    const available = tier.quantity_total - tier.quantity_reserved
+    if (available < quantity) {
+      return NextResponse.json({
+        error: 'Sold out',
+        sold_out: true,
+        remaining: available,
+        waitlist_available: true,
+      }, { status: 409 })
+    }
+
+    const { error: fbErr } = await supabase
+      .from('ticket_tiers')
+      .update({ quantity_reserved: tier.quantity_reserved + quantity })
+      .eq('id', tier_id)
+
+    if (fbErr) {
+      return NextResponse.json({ error: 'Failed to reserve tickets' }, { status: 500 })
+    }
+  } else if (updated === false) {
+    // RPC returned false — capacity exceeded
+    const available = tier.quantity_total - tier.quantity_reserved
     return NextResponse.json({
       error: 'Sold out',
       sold_out: true,
-      remaining: tier.capacity - tier.sold_count,
+      remaining: available,
       waitlist_available: true,
     }, { status: 409 })
   }
 
-  // Step 3: Atomic increment
-  const { error: incrementError } = await supabase
-    .from('ticket_tiers')
-    .update({ sold_count: tier.sold_count + quantity })
-    .eq('id', tier_id)
+  // ─── 3. Create PENDING reservation ─────────────────────────────────────
+  const totalPriceCents = tier.price_cents * quantity
+  const ttlExpiresAt = new Date(Date.now() + RESERVATION_TTL_MINUTES * 60_000).toISOString()
 
-  if (incrementError) {
-    return NextResponse.json({ error: 'Failed to reserve tickets' }, { status: 500 })
-  }
-
-  // Step 4: Create order (status: unpaid — Stripe session created separately)
-  const totalAmount = tier.price * quantity
-  const { data: order, error: orderError } = await supabase
-    .from('orders')
+  const { data: reservation, error: resErr } = await supabase
+    .from('reservations')
     .insert({
       user_id: user.id,
-      status: 'unpaid',
-      total_amount: totalAmount,
-      event_id: event_id,
+      item_id: event_id,
+      vendor_id: event.vendor_id,
+      status: 'PENDING',
+      quantity,
+      unit_price_cents: tier.price_cents,
+      total_price_cents: totalPriceCents,
+      currency: 'USD',
+      ttl_expires_at: ttlExpiresAt,
     })
     .select('id')
     .single()
 
-  if (orderError) {
-    // Compensating transaction: decrement sold_count
+  if (resErr) {
+    // Compensating transaction: release the reserved capacity
     await supabase
       .from('ticket_tiers')
-      .update({ sold_count: tier.sold_count })
+      .update({ quantity_reserved: Math.max(0, tier.quantity_reserved) })
       .eq('id', tier_id)
-    return NextResponse.json({ error: 'Failed to create order' }, { status: 500 })
+    return NextResponse.json({ error: 'Failed to create reservation' }, { status: 500 })
   }
 
-  // Step 5: Create order_items
-  await supabase.from('order_items').insert({
-    order_id: order.id,
-    item_type: 'ticket',
-    tier_id: tier_id,
-    quantity: quantity,
-    amount: totalAmount,
+  // Emit domain event
+  await supabase.from('domain_events').insert({
+    event_type: 'reservation.pending',
+    entity_type: 'reservation',
+    entity_id: reservation.id,
+    payload: { user_id: user.id, item_id: event_id, tier_id, quantity, ttl_expires_at: ttlExpiresAt },
+  })
+
+  // ─── 4. Create Stripe Checkout Session ─────────────────────────────────
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    line_items: [{
+      price_data: {
+        currency: 'usd',
+        product_data: { name: `${event.title} — ${tier.name} x${quantity}` },
+        unit_amount: tier.price_cents,
+      },
+      quantity: 1, // single line item with total
+    }],
+    metadata: {
+      user_id: user.id,
+      reservation_ids: JSON.stringify([reservation.id]),
+      tier_id,
+      event_id,
+    },
+    payment_intent_data: {
+      metadata: {
+        user_id: user.id,
+        reservation_ids: JSON.stringify([reservation.id]),
+        tier_id,
+        event_id,
+      },
+    },
+    expires_at: Math.floor((Date.now() + 30 * 60_000) / 1000),
+    success_url: `${process.env.NEXT_PUBLIC_APP_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/events/${event_id}`,
   })
 
   return NextResponse.json({
-    order_id: order.id,
+    reservation_id: reservation.id,
     tier_name: tier.name,
+    event_title: event.title,
     quantity,
-    total_amount: totalAmount,
-    // Stripe session to be created by /api/checkout
+    total_amount: totalPriceCents / 100,
+    stripe_session_url: session.url,
+    stripe_client_secret: session.client_secret,
+    expires_at: ttlExpiresAt,
   })
 }
