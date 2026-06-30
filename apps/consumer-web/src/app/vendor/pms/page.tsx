@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { AppLayoutShell } from '@/components/AppLayoutShell'
 
-export default function OnboardingPage() {
+export default function PmsPage() {
   const router = useRouter()
   const supabase = createClient()
   const [loading, setLoading] = useState(true)
@@ -13,7 +13,7 @@ export default function OnboardingPage() {
   useEffect(() => {
     const check = async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login?returnTo=/vendor/onboarding'); return }
+      if (!user) { router.push('/login?returnTo=/vendor/pms'); return }
       const { data: staff } = await supabase.from('vendor_staff').select('vendor_id').eq('user_id', user.id).eq('status', 'ACTIVE').maybeSingle()
       if (!staff) { router.push('/onboarding/vendor'); return }
       setLoading(false)
@@ -28,10 +28,10 @@ export default function OnboardingPage() {
       <div className="bg-gray-50 min-h-screen">
         <div className="mx-auto max-w-5xl px-4 py-8">
           <Link href="/vendor/dashboard" className="text-sm text-gray-400 hover:text-black mb-4 inline-block">← Dashboard</Link>
-          <h1 className="text-2xl font-black text-black mb-6 capitalize">onboarding</h1>
+          <h1 className="text-2xl font-black text-black mb-6 capitalize">pms</h1>
           <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
             <p className="text-gray-400">This screen loads data from Supabase.</p>
-            <p className="text-sm text-gray-300 mt-2">API routes for onboarding are wired at /api/onboarding</p>
+            <p className="text-sm text-gray-300 mt-2">API routes for pms are wired at /api/pms</p>
           </div>
         </div>
       </div>
