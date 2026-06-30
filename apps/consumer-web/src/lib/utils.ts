@@ -289,3 +289,14 @@ export function buildQueryStringFromParams(params: SearchParams | Record<string,
   const queryString = query.toString();
   return queryString ? `${queryString}` : "";
 }
+
+// EventSeats format helpers
+export function formatDate(date: Date | string): string {
+  return new Date(date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+}
+export function formatTime(date: Date | string): string {
+  return new Date(date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+}
+export function formatPrice(price: number): string {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(price)
+}
