@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 node_modules
 /.pnp
@@ -14,8 +12,6 @@ node_modules
 /coverage
 
 # next.js
-/.next/
-/out/
 **/.next/
 **/out/
 
@@ -39,25 +35,48 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files — NEVER commit secrets
+.env
+.env.*
+!.env.example
 
 # vercel
 .vercel
-
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
 local-*
-.claude
-.z-ai-config
+
+# logs
 *.log
 dev.log
 dev.out.log
-test
-prompt
-
 server.log
-# Skills directory
-/skills/references/
+
+# claude / ai config
+.claude
+.z-ai-config
+
+# Skills directory (sandbox-only)
+/skills/
+
+# References — 6 cloned repos, 423MB, NOT part of the build (Part XLII §42.2 — blueprints only)
+/references/
+
+# Upload directory — source docx + env files (sandbox-only, not part of repo)
+/upload/
+
+# Tool results (sandbox-only)
+/tool-results/
+
+# Dev artifacts
+.dev-server.pid
+scaffold-proof.png
+real-app-live.png
+real-app-deployed.png
+real-app-proof.png
+
+# Prisma (deprecated — we use Supabase)
+packages/db/prisma/
+packages/db/db/
