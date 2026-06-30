@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import Stripe from 'stripe'
+import { randomUUID } from 'crypto'
 
 // POST /api/webhooks/stripe
 // Stripe webhook handler — confirms reservations on payment success.
@@ -151,6 +152,48 @@ export async function POST(request: NextRequest) {
           } else {
             console.log(`[stripe-webhook] confirmed reservation ${reservationId}`)
           }
+
+          // ─── Create per-attendee ticket_instances (Hi.Events pattern) ──────
+          // One row per ticket in the reservation. Each gets its own QR secret.
+          const { data: reservation } = await supabase
+            .from('reservations')
+            .select('id, user_id, item_id, quantity, user_profiles!inner(display_name, email)')
+            .eq('id', reservationId)
+            .maybeSingle()
+
+          if (reservation) {
+            const profile = Array.isArray(reservation.user_profiles) ? reservation.user_profiles[0] : reservation.user_profiles
+
+            // Find the ticket_tier for this item
+            const { data: tier } = await supabase
+              .from('ticket_tiers')
+              .select('id')
+              .eq('item_id', reservation.item_id)
+              .order('sort_order', { ascending: true })
+              .limit(1)
+              .maybeSingle()
+
+            const instances = []
+            for (let i = 0; i < (reservation.quantity as number); i++) {
+              instances.push({
+                reservation_id: reservationId,
+                item_id: reservation.item_id,
+                ticket_tier_id: tier?.id ?? '00000000-0000-0000-0000-000000000000',
+                attendee_name: profile?.display_name ?? 'Attendee',
+                attendee_email: profile?.email ?? '',
+                qr_code_secret: randomUUID(), // unique per ticket instance
+                status: 'ISSUED',
+              })
+            }
+            if (instances.length > 0) {
+              const { error: insErr } = await supabase.from('ticket_instances').insert(instances)
+              if (insErr) {
+                console.error(`[stripe-webhook] ticket_instances insert failed for ${reservationId}:`, insErr.message)
+              } else {
+                console.log(`[stripe-webhook] created ${instances.length} ticket_instances for ${reservationId}`)
+              }
+            }
+          }
         }
 
         // Create payment record
@@ -162,7 +205,7 @@ export async function POST(request: NextRequest) {
           status: 'SUCCEEDED',
         })
 
-        console.log(`[stripe-webhook] checkout.session.completed: ${reservationIds.length} reservations confirmed`)
+        console.log(`[stripe-webhook] checkout.session.completed: ${reservationIds.length} reservations confirmed + ticket_instances created`)
         break
       }
 

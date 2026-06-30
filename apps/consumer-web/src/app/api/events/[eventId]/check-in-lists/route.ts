@@ -3,10 +3,9 @@ import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { randomUUID } from 'crypto'
 
-// GET /api/events/[eventId]/check-in-lists — list check-in lists for an event
-// POST /api/events/[eventId]/check-in-lists — create a check-in list
-// Adapted from Hi.Events: CheckInList model, CreateCheckInListHandler
-// Multiple check-in lists per event (e.g. "Day 1 Door", "VIP Entrance")
+// GET /api/events/[eventId]/check-in-lists — list check-in lists from check_in_lists table
+// POST /api/events/[eventId]/check-in-lists — create in check_in_lists table
+// REAL TABLE: check_in_lists (id, item_id, name, public_token, expires_at, created_by, revoked_at, created_at, updated_at)
 
 export async function GET(
   request: NextRequest,
@@ -15,18 +14,15 @@ export async function GET(
   const { eventId } = await params
   const supabase = createAdminClient()
 
-  const { data: event } = await supabase
-    .from('inventory_items')
-    .select('metadata')
-    .eq('id', eventId)
-    .maybeSingle()
+  const { data, error } = await supabase
+    .from('check_in_lists')
+    .select('*')
+    .eq('item_id', eventId)
+    .order('created_at', { ascending: false })
 
-  if (!event) return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const meta = (event.metadata as Record<string, unknown>) ?? {}
-  const lists = (meta.check_in_lists as Array<Record<string, unknown>>) ?? []
-
-  return NextResponse.json({ check_in_lists: lists })
+  return NextResponse.json({ check_in_lists: data ?? [] })
 }
 
 export async function POST(
@@ -40,47 +36,23 @@ export async function POST(
   const { eventId } = await params
   const supabase = createAdminClient()
   const body = await request.json()
-  const { name, activates_at, expires_at, tier_ids } = body
+  const { name, expires_at } = body
 
-  if (!name || !activates_at || !expires_at) {
-    return NextResponse.json({ error: 'name, activates_at, expires_at are required' }, { status: 400 })
-  }
+  if (!name) return NextResponse.json({ error: 'name is required' }, { status: 400 })
 
-  const { data: event } = await supabase
-    .from('inventory_items')
-    .select('metadata')
-    .eq('id', eventId)
-    .maybeSingle()
+  const { data, error } = await supabase
+    .from('check_in_lists')
+    .insert({
+      item_id: eventId,
+      name,
+      public_token: randomUUID(),
+      expires_at: expires_at ?? null,
+      created_by: user.id,
+    })
+    .select('*')
+    .single()
 
-  if (!event) return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  // Verify user owns the event
-  const { data: staff } = await supabase
-    .from('vendor_staff')
-    .select('role')
-    .eq('vendor_id', (event as { vendor_id?: string }).vendor_id)
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  const meta = (event.metadata as Record<string, unknown>) ?? {}
-  const lists = (meta.check_in_lists as Array<Record<string, unknown>>) ?? []
-
-  const newList = {
-    id: randomUUID(),
-    name,
-    activates_at,
-    expires_at,
-    tier_ids: tier_ids ?? null, // null = all tiers
-    status: 'ACTIVE',
-    created_at: new Date().toISOString(),
-  }
-
-  lists.push(newList)
-
-  await supabase
-    .from('inventory_items')
-    .update({ metadata: { ...meta, check_in_lists: lists } })
-    .eq('id', eventId)
-
-  return NextResponse.json({ check_in_list: newList }, { status: 201 })
+  return NextResponse.json({ check_in_list: data }, { status: 201 })
 }

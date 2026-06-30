@@ -5,6 +5,9 @@ import { createAdminClient } from '@/lib/supabase/admin'
 // POST /api/self-service/resend?reservation_id= — resend confirmation email
 // Also: POST /api/attendees/resend — same thing (alias for vendor/admin)
 // Adapted from Hi.Events: ResendAttendeeTicketHandler, ResendOrderConfirmationPublicHandler
+//
+// Creates a REAL notification row in the notifications table (status=QUEUED).
+// The /api/notifications/process worker picks it up and sends via Resend.
 
 export async function POST(request: NextRequest) {
   const serverClient = await createServerClient()
@@ -19,7 +22,10 @@ export async function POST(request: NextRequest) {
 
   const { data: reservation } = await supabase
     .from('reservations')
-    .select('id, user_id, status, inventory_items!inner(title)')
+    .select(`
+      id, user_id, status, total_price_cents, quantity,
+      inventory_items!inner(title, category, metadata)
+    `)
     .eq('id', reservationId)
     .maybeSingle()
 
@@ -37,20 +43,58 @@ export async function POST(request: NextRequest) {
     if (!staff) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  // Queue the email via domain_events (notification-send worker picks it up)
+  const inv = Array.isArray(reservation.inventory_items) ? reservation.inventory_items[0] : reservation.inventory_items
+  const eventMeta = (inv?.metadata as Record<string, unknown>) ?? {}
+
+  // Create a REAL notification row in the notifications table
+  const { data: notification, error: notifErr } = await supabase
+    .from('notifications')
+    .insert({
+      user_id: reservation.user_id,
+      notification_type: 'ticket_resend',
+      channel: 'EMAIL',
+      priority: 'HIGH',
+      subject: `Your tickets for ${inv?.title ?? 'your event'}`,
+      body: `Your reservation has been confirmed. Reservation ID: ${reservationId}. Quantity: ${reservation.quantity}. Total: $${((reservation.total_price_cents ?? 0) / 100).toFixed(2)}. Event: ${inv?.title ?? 'N/A'}.`,
+      data_payload: {
+        reservation_id: reservationId,
+        event_title: inv?.title,
+        event_date: eventMeta.starts_at ?? null,
+        quantity: reservation.quantity,
+        total_paid: reservation.total_price_cents,
+        requested_by: user.id,
+      },
+      status: 'QUEUED',
+      rate_limit_category: 'NON_CRITICAL',
+    })
+    .select('id, status')
+    .single()
+
+  if (notifErr) {
+    console.error('[resend] notification insert error:', notifErr)
+    return NextResponse.json({ error: 'Failed to queue resend' }, { status: 500 })
+  }
+
+  // Also emit domain event for audit
   await supabase.from('domain_events').insert({
     event_type: 'notification.email.requested',
     entity_type: 'reservation',
     entity_id: reservationId,
     payload: {
+      notification_id: notification.id,
       template: 'ticket_confirmation',
       user_id: reservation.user_id,
       reservation_id: reservationId,
-      event_title: Array.isArray(reservation.inventory_items) ? reservation.inventory_items[0]?.title : reservation.inventory_items?.title,
+      event_title: inv?.title,
       requested_by: user.id,
-      requested_at: new Date().toISOString(),
     },
   })
 
-  return NextResponse.json({ sent: true, reservation_id: reservationId })
+  return NextResponse.json({
+    sent: true,
+    reservation_id: reservationId,
+    notification_id: notification.id,
+    notification_status: notification.status,
+    message: 'Notification queued. Call POST /api/notifications/process to deliver.',
+  })
 }

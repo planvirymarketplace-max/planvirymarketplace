@@ -108,6 +108,26 @@ export async function POST(request: NextRequest) {
         .eq('id', blockWithCapacity.id)
     }
 
+    // ─── Check shared capacity_assignments (Hi.Events pattern) ─────────────
+    const { data: capPools } = await supabase
+      .from('capacity_assignments')
+      .select('id, name, capacity, used')
+      .eq('item_id', inventoryItemId)
+
+    if (capPools && capPools.length > 0) {
+      for (const pool of capPools) {
+        const available = pool.capacity - pool.used
+        if (available < quantity) {
+          return NextResponse.json({ error: `Sold out: ${item.name} (shared pool: ${pool.name})` }, { status: 409 })
+        }
+        // Atomically increment used
+        await supabase
+          .from('capacity_assignments')
+          .update({ used: pool.used + quantity })
+          .eq('id', pool.id)
+      }
+    }
+
     // Create PENDING reservation
     const { data: reservation, error: resErr } = await supabase
       .from('reservations')

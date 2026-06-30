@@ -53,42 +53,70 @@ export async function POST(request: NextRequest) {
 
   const { data: recipients } = await query
 
-  const message = {
-    id: randomUUID(),
-    event_id,
-    sender_id: user.id,
-    subject,
-    body: messageBody,
-    recipient_filter,
-    recipient_count: recipients?.length ?? 0,
-    status: scheduled_at ? 'SCHEDULED' : 'SENDING',
-    scheduled_at: scheduled_at ?? null,
-    sent_at: scheduled_at ? null : new Date().toISOString(),
+  // ─── Create a notification row per recipient in the notifications table ─
+  // REAL TABLE: notifications (user_id, notification_type, channel, priority,
+  //   subject, body, cta_url, data_payload, status, rate_limit_category)
+  // The notification-send worker (/api/notifications/process) picks these up
+  // and delivers them via Resend (email), in-app, or push.
+
+  const notificationRows = (recipients ?? []).map((r: Record<string, unknown>) => {
+    const profile = Array.isArray(r.user_profiles) ? r.user_profiles[0] : r.user_profiles
+    return {
+      user_id: r.user_id,
+      notification_type: 'organizer_message',
+      channel: 'EMAIL',
+      priority: 'MEDIUM',
+      subject,
+      body: messageBody,
+      data_payload: {
+        event_id,
+        sender_id: user.id,
+        event_title: event?.title ?? null,
+        recipient_name: profile?.display_name ?? null,
+      },
+      status: 'QUEUED',
+      rate_limit_category: 'NON_CRITICAL',
+    }
+  })
+
+  let insertedNotifications: Array<Record<string, unknown>> = []
+  if (notificationRows.length > 0) {
+    const { data: inserted, error: notifErr } = await supabase
+      .from('notifications')
+      .insert(notificationRows)
+      .select('id, user_id, status')
+    if (notifErr) {
+      console.error('[messages/send] notifications insert error:', notifErr)
+    } else {
+      insertedNotifications = inserted ?? []
+    }
   }
 
-  // Store message in event metadata
-  const { data: ev } = await supabase
-    .from('inventory_items')
-    .select('metadata')
-    .eq('id', event_id)
-    .maybeSingle()
-
-  const meta = (ev?.metadata as Record<string, unknown>) ?? {}
-  const messages = (meta.messages as Array<Record<string, unknown>>) ?? []
-  messages.push(message)
-
-  await supabase
-    .from('inventory_items')
-    .update({ metadata: { ...meta, messages } })
-    .eq('id', event_id)
-
-  // Emit domain event (triggers notification-send worker)
+  // Also emit a domain event for audit + outgoing webhook triggers
   await supabase.from('domain_events').insert({
     event_type: 'message.queued',
     entity_type: 'inventory_item',
     entity_id: event_id,
-    payload: { message_id: message.id, recipient_count: message.recipient_count, scheduled_at },
+    payload: {
+      subject,
+      recipient_count: notificationRows.length,
+      scheduled_at: scheduled_at ?? null,
+      notification_ids: insertedNotifications.map((n) => n.id),
+    },
   })
 
-  return NextResponse.json({ message }, { status: 201 })
+  return NextResponse.json({
+    message: {
+      event_id,
+      sender_id: user.id,
+      subject,
+      body: messageBody,
+      recipient_filter,
+      recipient_count: notificationRows.length,
+      status: 'QUEUED',
+      scheduled_at: scheduled_at ?? null,
+    },
+    notifications_created: insertedNotifications.length,
+    notification_ids: insertedNotifications.map((n) => n.id),
+  }, { status: 201 })
 }

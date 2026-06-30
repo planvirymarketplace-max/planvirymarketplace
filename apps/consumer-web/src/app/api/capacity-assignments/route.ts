@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-// POST /api/capacity-assignments — create shared capacity pool across tiers
-// GET /api/capacity-assignments?event_id= — list capacity pools for an event
-// Adapted from Hi.Events: CapacityAssignment model, capacity_assignments table
+// GET /api/capacity-assignments?event_id= — list from capacity_assignments table
+// POST /api/capacity-assignments — create in capacity_assignments table
+// REAL TABLE: capacity_assignments (id, item_id, name, capacity, used, created_at, updated_at)
 
 export async function GET(request: NextRequest) {
   const serverClient = await createServerClient()
@@ -17,19 +17,15 @@ export async function GET(request: NextRequest) {
 
   if (!eventId) return NextResponse.json({ error: 'event_id is required' }, { status: 400 })
 
-  // Capacity pools stored in inventory_items.metadata.capacity_assignments
-  const { data: event } = await supabase
-    .from('inventory_items')
-    .select('metadata')
-    .eq('id', eventId)
-    .maybeSingle()
+  const { data, error } = await supabase
+    .from('capacity_assignments')
+    .select('*')
+    .eq('item_id', eventId)
+    .order('created_at', { ascending: false })
 
-  if (!event) return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const meta = (event.metadata as Record<string, unknown>) ?? {}
-  const pools = (meta.capacity_assignments as Array<Record<string, unknown>>) ?? []
-
-  return NextResponse.json({ capacity_assignments: pools })
+  return NextResponse.json({ capacity_assignments: data ?? [] })
 }
 
 export async function POST(request: NextRequest) {
@@ -39,39 +35,24 @@ export async function POST(request: NextRequest) {
 
   const supabase = createAdminClient()
   const body = await request.json()
-  const { event_id, name, capacity, tier_ids, applies_to = 'PRODUCTS' } = body
+  const { event_id, name, capacity } = body
 
-  if (!event_id || !capacity) {
-    return NextResponse.json({ error: 'event_id and capacity are required' }, { status: 400 })
+  if (!event_id || !name || capacity === undefined) {
+    return NextResponse.json({ error: 'event_id, name, capacity are required' }, { status: 400 })
   }
 
-  const { data: event } = await supabase
-    .from('inventory_items')
-    .select('metadata')
-    .eq('id', event_id)
-    .maybeSingle()
+  const { data, error } = await supabase
+    .from('capacity_assignments')
+    .insert({
+      item_id: event_id,
+      name,
+      capacity,
+      used: 0,
+    })
+    .select('*')
+    .single()
 
-  if (!event) return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const meta = (event.metadata as Record<string, unknown>) ?? {}
-  const pools = (meta.capacity_assignments as Array<Record<string, unknown>>) ?? []
-
-  const newPool = {
-    id: crypto.randomUUID(),
-    name: name ?? 'Shared Capacity',
-    capacity,
-    used_capacity: 0,
-    applies_to, // 'EVENT' | 'PRODUCTS'
-    tier_ids: tier_ids ?? [], // which ticket_tiers share this pool
-    status: 'ACTIVE',
-  }
-
-  pools.push(newPool)
-
-  await supabase
-    .from('inventory_items')
-    .update({ metadata: { ...meta, capacity_assignments: pools } })
-    .eq('id', event_id)
-
-  return NextResponse.json({ capacity_assignment: newPool }, { status: 201 })
+  return NextResponse.json({ capacity_assignment: data }, { status: 201 })
 }
