@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react'
 import { ShowListing } from '@/components/ticketing/show-listing'
-import { Show, ShowStatus } from '../../types'
+import { Show, ShowStatus } from '@/lib/types/eventseats'
 
 interface ApiShow {
   id: string

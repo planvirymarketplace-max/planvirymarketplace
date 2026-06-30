@@ -5,7 +5,7 @@ import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { AdminDashboard } from '@/components/ticketing/admin-dashboard'
 import { Button } from '@/components/ui/button'
-import { Booking, Performance } from '../../types'
+import { Booking, Performance } from '@/lib/types/eventseats'
 
 interface DashboardStats {
   totalBookings: number

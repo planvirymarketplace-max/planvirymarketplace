@@ -1,8 +1,8 @@
 'use client'
 
 import React, { useState, useMemo } from 'react'
-import { cn } from '../../lib/utils'
-import { Seat, SeatSelection, TicketType, SeatingLayout } from '../../types'
+import { cn } from '@/lib/utils'
+import { Seat, SeatSelection, TicketType, SeatingLayout } from '@/lib/types/eventseats'
 
 interface SeatGridProps {
   seatingLayout: SeatingLayout

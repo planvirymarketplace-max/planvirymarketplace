@@ -3,11 +3,11 @@
 import React, { useState, useMemo } from 'react'
 import Image from 'next/image'
 import { SeatGrid } from '../seat/seat-grid'
-import { BookingForm } from './booking-form'
+import { BookingForm } from '@/components/ticketing/booking-form'
 import { Button } from '../ui/button'
 import { QRCode, generateWalletPassData } from '../ui/qr-code'
-import { cn } from '../../lib/utils'
-import { Show, Performance, SeatingLayout, SeatSelection, BookingFormData, TicketType } from '../../types'
+import { cn } from '@/lib/utils'
+import { Show, Performance, SeatingLayout, SeatSelection, BookingFormData, TicketType } from '@/lib/types/eventseats'
 
 interface BookingResult {
   bookingNumber?: string

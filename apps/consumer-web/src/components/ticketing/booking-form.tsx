@@ -5,8 +5,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Button } from '../ui/button'
-import { cn } from '../../lib/utils'
-import { BookingFormData, SeatSelection } from '../../types'
+import { cn } from '@/lib/utils'
+import { BookingFormData, SeatSelection } from '@/lib/types/eventseats'
 
 const bookingSchema = z.object({
   firstName: z.string().min(1, 'First name is required'),

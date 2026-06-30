@@ -2,10 +2,10 @@
 
 import React from 'react'
 import Image from 'next/image'
-import { formatDate, formatTime, formatPrice } from '../../lib/utils'
-import { Show, Performance } from '../../types'
-import { Button } from './button'
-import { cn } from '../../lib/utils'
+import { formatDate, formatTime, formatPrice } from '@/lib/utils'
+import { Show, Performance } from '@/lib/types/eventseats'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface ShowListingProps {
   shows: Show[]

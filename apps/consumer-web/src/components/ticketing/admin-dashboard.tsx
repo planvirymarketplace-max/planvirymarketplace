@@ -1,8 +1,8 @@
 'use client'
 
 import React from 'react'
-import { formatPrice, formatDateTime } from '../../lib/utils'
-import { Booking, Show, Performance } from '../../types'
+import { formatPrice, formatDateTime } from '@/lib/utils'
+import { Booking, Show, Performance } from '@/lib/types/eventseats'
 import { Button } from '../ui/button'
 
 interface DashboardStats {
