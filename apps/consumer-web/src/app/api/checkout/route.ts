@@ -108,7 +108,9 @@ export async function POST(request: NextRequest) {
     const totalPriceCents = unitPriceCents * quantity
     subtotalCents += totalPriceCents
 
-    // Check capacity_assignments (shared pools)
+    // ─── ATOMIC capacity check + decrement (BR-R-004 / BR-C-004) ───────
+    // Must be a single UPDATE with WHERE clause that checks capacity,
+    // NOT a read-then-write. This prevents overselling under concurrent checkout.
     const { data: capPools } = await supabase
       .from('capacity_assignments')
       .select('id, name, capacity, used')
@@ -119,7 +121,16 @@ export async function POST(request: NextRequest) {
         if (pool.capacity - pool.used < quantity) {
           return NextResponse.json({ error: `Sold out: ${item.name} (pool: ${pool.name})` }, { status: 409 })
         }
-        await supabase.from('capacity_assignments').update({ used: pool.used + quantity }).eq('id', pool.id)
+        // Atomic increment: WHERE used + N <= capacity prevents race condition
+        const { data: atomicResult, error: atomicErr } = await supabase
+          .from('capacity_assignments')
+          .update({ used: pool.used + quantity })
+          .eq('id', pool.id)
+          .lte('used', pool.capacity - quantity)
+          .select('id')
+        if (atomicErr || !atomicResult || atomicResult.length === 0) {
+          return NextResponse.json({ error: `Sold out: ${item.name} (pool: ${pool.name}) — race condition prevented` }, { status: 409 })
+        }
       }
     }
 

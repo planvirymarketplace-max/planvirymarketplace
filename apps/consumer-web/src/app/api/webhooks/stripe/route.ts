@@ -279,6 +279,61 @@ export async function POST(request: NextRequest) {
         break
       }
 
+      // ─── payment_intent.succeeded → confirm if checkout.session.completed missed ─
+      case 'payment_intent.succeeded': {
+        const metadata = (eventData.metadata ?? {}) as Record<string, string>
+        const reservationIdsJson = metadata.reservation_ids
+        const paymentIntentId = eventData.id as string
+
+        if (!reservationIdsJson) {
+          // Try to find reservations by payment_intent_id
+          const { data: existing } = await supabase
+            .from('reservations')
+            .select('id, status')
+            .eq('stripe_payment_intent_id', paymentIntentId)
+          if (existing && existing.length > 0) {
+            for (const r of existing as Array<{ id: string; status: string }>) {
+              if (r.status === 'PENDING') {
+                const { error: rpcErr } = await supabase.rpc('rpc_confirm_reservation', {
+                  p_reservation_id: r.id,
+                  p_stripe_payment_intent_id: paymentIntentId,
+                })
+                if (rpcErr) {
+                  await supabase.from('reservations')
+                    .update({ status: 'CONFIRMED', confirmed_at: new Date().toISOString(), stripe_payment_intent_id: paymentIntentId })
+                    .eq('id', r.id).eq('status', 'PENDING')
+                }
+              }
+            }
+          }
+          break
+        }
+
+        const reservationIds: string[] = JSON.parse(reservationIdsJson)
+        for (const reservationId of reservationIds) {
+          // Check if already confirmed (checkout.session.completed may have handled it)
+          const { data: res } = await supabase
+            .from('reservations')
+            .select('status')
+            .eq('id', reservationId)
+            .maybeSingle()
+
+          if (res?.status === 'PENDING') {
+            const { error: rpcErr } = await supabase.rpc('rpc_confirm_reservation', {
+              p_reservation_id: reservationId,
+              p_stripe_payment_intent_id: paymentIntentId,
+            })
+            if (rpcErr) {
+              await supabase.from('reservations')
+                .update({ status: 'CONFIRMED', confirmed_at: new Date().toISOString(), stripe_payment_intent_id: paymentIntentId })
+                .eq('id', reservationId).eq('status', 'PENDING')
+            }
+            console.log(`[stripe-webhook] payment_intent.succeeded confirmed ${reservationId}`)
+          }
+        }
+        break
+      }
+
       // ─── payment_intent.payment_failed → cancel reservations ─────────────
       case 'payment_intent.payment_failed': {
         const metadata = (eventData.metadata ?? {}) as Record<string, string>

@@ -1,9 +1,9 @@
-import { NextResponse, type NextRequest } from "next/server"
+import { type NextRequest, NextResponse } from "next/server"
+import { updateSession } from "@/lib/supabase/middleware"
 
 export async function middleware(request: NextRequest) {
-  return NextResponse.next({
-    request,
-  })
+  // Refresh Supabase session + protect routes server-side
+  return await updateSession(request)
 }
 
 export const config = {

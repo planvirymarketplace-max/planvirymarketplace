@@ -44,5 +44,45 @@ export async function updateSession(request: NextRequest) {
     }
   }
 
+  // Protect account portal
+  if (request.nextUrl.pathname.startsWith("/account")) {
+    if (!user) {
+      const url = request.nextUrl.clone()
+      url.pathname = "/login"
+      url.searchParams.set("redirect", request.nextUrl.pathname)
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // Protect vendor portal
+  if (request.nextUrl.pathname.startsWith("/vendor/portal")) {
+    if (!user) {
+      const url = request.nextUrl.clone()
+      url.pathname = "/login"
+      url.searchParams.set("redirect", request.nextUrl.pathname)
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // Protect checkout (must be authenticated to pay — BR-C-005)
+  if (request.nextUrl.pathname.startsWith("/checkout") && !request.nextUrl.searchParams.has("session_id")) {
+    if (!user) {
+      const url = request.nextUrl.clone()
+      url.pathname = "/login"
+      url.searchParams.set("redirect", request.nextUrl.pathname)
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // Protect check-in scanner (vendor staff only)
+  if (request.nextUrl.pathname.startsWith("/check-in")) {
+    if (!user) {
+      const url = request.nextUrl.clone()
+      url.pathname = "/login"
+      url.searchParams.set("redirect", request.nextUrl.pathname)
+      return NextResponse.redirect(url)
+    }
+  }
+
   return supabaseResponse
 }
