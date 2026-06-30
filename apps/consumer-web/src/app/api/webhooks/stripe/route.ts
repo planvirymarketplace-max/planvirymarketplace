@@ -198,14 +198,36 @@ export async function POST(request: NextRequest) {
 
         // Create payment record
         const amountCents = (eventData.amount_total as number) ?? 0
-        await supabase.from('payments').insert({
+        const { data: payment } = await supabase.from('payments').insert({
           stripe_payment_intent_id: stripePaymentIntentId,
           amount_cents: amountCents,
           currency: ((eventData.currency as string) ?? 'usd').toUpperCase(),
           status: 'SUCCEEDED',
-        })
+        }).select('id').single()
 
-        console.log(`[stripe-webhook] checkout.session.completed: ${reservationIds.length} reservations confirmed + ticket_instances created`)
+        // Create vendor_payouts records (Stripe Connect split — platform fee + vendor payout)
+        const platformFeeCents = Math.round(amountCents * 0.10) // 10% platform fee
+        const vendorPayoutCents = amountCents - platformFeeCents
+        for (const reservationId of reservationIds) {
+          const { data: res } = await supabase
+            .from('reservations')
+            .select('vendor_id, total_price_cents')
+            .eq('id', reservationId)
+            .maybeSingle()
+          if (res?.vendor_id) {
+            const proportionalPayout = Math.round(vendorPayoutCents * ((res.total_price_cents as number) / amountCents))
+            await supabase.from('vendor_payouts').insert({
+              vendor_id: res.vendor_id,
+              payment_id: payment?.id,
+              gross_cents: res.total_price_cents,
+              platform_fee_cents: Math.round((res.total_price_cents as number) * 0.10),
+              payout_cents: proportionalPayout,
+              status: 'PENDING',
+            })
+          }
+        }
+
+        console.log(`[stripe-webhook] checkout.session.completed: ${reservationIds.length} reservations confirmed + ticket_instances + vendor_payouts created`)
         break
       }
 

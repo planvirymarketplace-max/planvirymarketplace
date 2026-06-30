@@ -206,6 +206,16 @@ export async function POST(request: NextRequest) {
   // In production, this would come from tax_and_fees or tax_lines config
   taxCents = Math.round(taxableAmount * 0.08)
 
+  // Create tax_lines record
+  if (taxCents > 0) {
+    await supabase.from('tax_lines').insert({
+      tax_type: 'SALES',
+      rate: 8.0,
+      amount: taxCents,
+      jurisdiction: 'DEFAULT',
+    })
+  }
+
   const totalCents = taxableAmount - discountCents + taxCents
 
   // Update order with totals
