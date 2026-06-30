@@ -95,6 +95,13 @@ export async function POST(request: Request) {
       _total_count: count ?? 0,
     }))
 
+    // ─── Log search query to search_logs (P2: search quality improvement) ──
+    await supabase.from('search_logs').insert({
+      query: body.category_key,
+      filters: { lat: body.user_lat, lng: body.user_lng, date: body.availability_date },
+      results_count: count ?? 0,
+    })
+
     return NextResponse.json({
       vendors,
       total: count ?? 0,

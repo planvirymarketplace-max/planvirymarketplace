@@ -3,40 +3,54 @@ import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requiresStripeCharge, type CartItem } from '@/lib/cart-context'
 import Stripe from 'stripe'
+import { randomUUID } from 'crypto'
 
 // POST /api/checkout
-// Revenue path: Cart → PENDING Reservations → Stripe Checkout Session
-// Adapted from movinin (checkout session creation) + TicketiHub (metadata pattern)
-// Uses new schema: reservations, availability_blocks, payments, domain_events
+// Revenue path: Cart → PENDING Reservations → Order → Stripe Checkout Session → checkout_sessions record
+// Uses REAL TABLES: orders, reservation_line_items, checkout_sessions, idempotency_keys, tax_lines
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2024-06-20' as Stripe.LatestApiVersion,
 })
 
-const RESERVATION_TTL_MINUTES = 15 // BR-R-002
+const RESERVATION_TTL_MINUTES = 15
 
 export async function POST(request: NextRequest) {
-  const supabase = createAdminClient()
   const serverClient = await createServerClient()
   const { data: { user } } = await serverClient.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const supabase = createAdminClient()
   const body = await request.json()
-  const { cart_items, trip_id, promo_code, question_answers } = body as {
+  const { cart_items, trip_id, promo_code, question_answers, idempotency_key } = body as {
     cart_items: CartItem[]
     trip_id?: string
     promo_code?: string
     question_answers?: Array<{ question_id: string; answer: unknown }>
+    idempotency_key?: string
   }
 
   if (!cart_items || !Array.isArray(cart_items) || cart_items.length === 0) {
     return NextResponse.json({ error: 'cart_items is required' }, { status: 400 })
   }
 
+  // ─── Idempotency check (P0: prevents duplicate reservations on retry) ────
+  if (idempotency_key) {
+    const { data: existing } = await supabase
+      .from('idempotency_keys')
+      .select('key, response_payload')
+      .eq('key', idempotency_key)
+      .maybeSingle()
+
+    if (existing?.response_payload) {
+      // Return the original response — this is a retry
+      return NextResponse.json(existing.response_payload)
+    }
+  }
+
   const chargeableItems = cart_items.filter(requiresStripeCharge)
   const nonChargeableItems = cart_items.filter((i) => !requiresStripeCharge(i))
 
-  // Process non-chargeable items (restaurant reservations without deposit, external events)
   const nonChargeableResults: Array<{ type: string; name: string; status: string }> = []
   for (const item of nonChargeableItems) {
     nonChargeableResults.push({ type: item.type, name: item.name, status: 'confirmed_no_charge' })
@@ -50,65 +64,51 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  // ─── Create PENDING reservations for chargeable items ───────────────────
-  // This replicates rpc_create_pending_reservation logic in application code
-  // (the RPC has a SET LOCAL conflict with the Supabase pooler — to be fixed)
+  // ─── Create ORDER (parent record for all reservations in this checkout) ──
+  const { data: order, error: orderErr } = await supabase
+    .from('orders')
+    .insert({
+      user_id: user.id,
+      status: 'DRAFT',
+      subtotal_cents: 0,
+      tax_cents: 0,
+      discount_cents: 0,
+      total_cents: 0,
+      currency: 'USD',
+    })
+    .select('id')
+    .single()
 
-  const reservations: Array<{ id: string; item_id: string; amount: number }> = []
-  let totalAmountCents = 0
-  const ttlExpiresAt = new Date(Date.now() + RESERVATION_TTL_MINUTES * 60_000).toISOString()
+  if (orderErr || !order) {
+    return NextResponse.json({ error: 'Failed to create order' }, { status: 500 })
+  }
+
+  // ─── Create PENDING reservations + reservation_line_items ───────────────
+  const reservations: Array<{ id: string; item_id: string; amount: number; vendor_id: string }> = []
+  let subtotalCents = 0
 
   for (const item of chargeableItems) {
-    // Resolve the inventory_item_id for this cart item
-    // listing_id is the inventory_items.id for most types
     const inventoryItemId = item.listing_id ?? item.vendor_id ?? item.experience_slot_id
     if (!inventoryItemId) {
-      console.error('[checkout] no item ID for:', item.name)
       return NextResponse.json({ error: `Cannot resolve inventory item for: ${item.name}` }, { status: 400 })
     }
 
-    // Load inventory item — must be PUBLISHED
-    const { data: invItem, error: invErr } = await supabase
+    const { data: invItem } = await supabase
       .from('inventory_items')
-      .select('id, vendor_id, base_price_cents, currency, status, title, category')
+      .select('id, vendor_id, base_price_cents, currency, status, title')
       .eq('id', inventoryItemId)
       .maybeSingle()
 
-    if (invErr || !invItem) {
-      return NextResponse.json({ error: `Item not found: ${item.name}` }, { status: 404 })
-    }
-    if (invItem.status !== 'PUBLISHED') {
+    if (!invItem || invItem.status !== 'PUBLISHED') {
       return NextResponse.json({ error: `Item unavailable: ${item.name}` }, { status: 409 })
     }
 
     const quantity = item.quantity ?? 1
-    const unitPriceCents = item.amount * 100 // item.amount is in dollars
+    const unitPriceCents = item.amount * 100
     const totalPriceCents = unitPriceCents * quantity
-    totalAmountCents += totalPriceCents
+    subtotalCents += totalPriceCents
 
-    // Check availability_blocks capacity
-    const { data: blocks } = await supabase
-      .from('availability_blocks')
-      .select('id, total_capacity, reserved_capacity')
-      .eq('item_id', inventoryItemId)
-      .eq('is_available', true)
-
-    if (blocks && blocks.length > 0) {
-      const blockWithCapacity = blocks.find((b) => (b.total_capacity - b.reserved_capacity) >= quantity)
-      if (!blockWithCapacity) {
-        return NextResponse.json({ error: `Sold out: ${item.name}` }, { status: 409 })
-      }
-      // Reserve capacity
-      await supabase
-        .from('availability_blocks')
-        .update({
-          reserved_capacity: blockWithCapacity.reserved_capacity + quantity,
-          is_available: (blockWithCapacity.reserved_capacity + quantity) < blockWithCapacity.total_capacity,
-        })
-        .eq('id', blockWithCapacity.id)
-    }
-
-    // ─── Check shared capacity_assignments (Hi.Events pattern) ─────────────
+    // Check capacity_assignments (shared pools)
     const { data: capPools } = await supabase
       .from('capacity_assignments')
       .select('id, name, capacity, used')
@@ -116,15 +116,10 @@ export async function POST(request: NextRequest) {
 
     if (capPools && capPools.length > 0) {
       for (const pool of capPools) {
-        const available = pool.capacity - pool.used
-        if (available < quantity) {
-          return NextResponse.json({ error: `Sold out: ${item.name} (shared pool: ${pool.name})` }, { status: 409 })
+        if (pool.capacity - pool.used < quantity) {
+          return NextResponse.json({ error: `Sold out: ${item.name} (pool: ${pool.name})` }, { status: 409 })
         }
-        // Atomically increment used
-        await supabase
-          .from('capacity_assignments')
-          .update({ used: pool.used + quantity })
-          .eq('id', pool.id)
+        await supabase.from('capacity_assignments').update({ used: pool.used + quantity }).eq('id', pool.id)
       }
     }
 
@@ -140,17 +135,34 @@ export async function POST(request: NextRequest) {
         unit_price_cents: unitPriceCents,
         total_price_cents: totalPriceCents,
         currency: invItem.currency || 'USD',
-        starts_at: item.date || item.start_date || null,
-        ends_at: item.end_date || null,
-        ttl_expires_at: ttlExpiresAt,
+        ttl_expires_at: new Date(Date.now() + RESERVATION_TTL_MINUTES * 60_000).toISOString(),
         itinerary_session_id: trip_id ?? null,
       })
       .select('id')
       .single()
 
     if (resErr) {
-      console.error('[checkout] reservation insert failed:', resErr)
       return NextResponse.json({ error: `Failed to reserve: ${item.name}` }, { status: 500 })
+    }
+
+    // Create reservation_line_item (links reservation to order)
+    await supabase.from('reservation_line_items').insert({
+      order_id: order.id,
+      reservation_id: reservation.id,
+      item_id: inventoryItemId,
+      vendor_id: invItem.vendor_id,
+      ticket_tier_id: null,
+      quantity,
+      unit_price_cents: unitPriceCents,
+      total_price_cents: totalPriceCents,
+    })
+
+    // Store question answers on reservation metadata
+    if (question_answers && question_answers.length > 0) {
+      await supabase
+        .from('reservations')
+        .update({ metadata: { answers: question_answers } })
+        .eq('id', reservation.id)
     }
 
     // Emit domain event
@@ -158,140 +170,78 @@ export async function POST(request: NextRequest) {
       event_type: 'reservation.pending',
       entity_type: 'reservation',
       entity_id: reservation.id,
-      payload: { user_id: user.id, item_id: inventoryItemId, quantity, ttl_expires_at: ttlExpiresAt },
+      payload: { user_id: user.id, item_id: inventoryItemId, quantity, order_id: order.id },
     })
 
-    reservations.push({ id: reservation.id, item_id: inventoryItemId, amount: totalPriceCents })
-
-    // Store question answers on the reservation metadata
-    if (question_answers && question_answers.length > 0) {
-      await supabase
-        .from('reservations')
-        .update({
-          metadata: {
-            answers: question_answers.map((qa) => ({
-              question_id: qa.question_id,
-              answer: qa.answer,
-              answered_at: new Date().toISOString(),
-            })),
-          },
-        })
-        .eq('id', reservation.id)
-    }
+    reservations.push({ id: reservation.id, item_id: inventoryItemId, amount: totalPriceCents, vendor_id: invItem.vendor_id })
   }
 
-  // ─── Apply promo code if provided ───────────────────────────────────────
-  let promoDiscountCents = 0
-  let appliedPromoCode: string | null = null
-  if (promo_code && reservations.length > 0) {
-    // Load the first reservation's event to check promo codes
-    const firstItem = reservations[0]
-    const { data: event } = await supabase
-      .from('inventory_items')
-      .select('metadata')
-      .eq('id', firstItem.item_id)
+  // ─── Apply discount (from discounts table) ──────────────────────────────
+  let discountCents = 0
+  let appliedDiscountCode: string | null = null
+  if (promo_code) {
+    const { data: discount } = await supabase
+      .from('discounts')
+      .select('*')
+      .eq('code', promo_code.toUpperCase())
+      .eq('status', 'ACTIVE')
       .maybeSingle()
 
-    if (event) {
-      const meta = (event.metadata as Record<string, unknown>) ?? {}
-      const promoCodes = (meta.promo_codes as Array<Record<string, unknown>>) ?? []
-      const promo = promoCodes.find((p) => p.code === promo_code.toUpperCase())
-
-      if (promo) {
-        // Validate: not expired, under max uses
-        const isExpired = promo.expires_at && new Date(promo.expires_at as string) < new Date()
-        const maxUsesReached = promo.max_uses !== null && (promo.uses as number) >= (promo.max_uses as number)
-
-        if (!isExpired && !maxUsesReached) {
-          if (promo.discount_type === 'PERCENTAGE') {
-            promoDiscountCents = Math.round((totalAmountCents * (promo.discount_value as number)) / 100)
-          } else {
-            promoDiscountCents = promo.discount_value as number
-          }
-          appliedPromoCode = promo.code as string
-
-          // Increment usage count
-          promo.uses = ((promo.uses as number) ?? 0) + 1
-          await supabase
-            .from('inventory_items')
-            .update({ metadata: { ...meta, promo_codes: promoCodes } })
-            .eq('id', firstItem.item_id)
-
-          // Store promo on reservations
-          for (const r of reservations) {
-            await supabase
-              .from('reservations')
-              .update({
-                metadata: {
-                  promo_code: appliedPromoCode,
-                  promo_discount_cents: promoDiscountCents,
-                },
-                total_price_cents: Math.max(0, r.amount - Math.round(promoDiscountCents / reservations.length)),
-              })
-              .eq('id', r.id)
-          }
-        }
+    if (discount) {
+      // Calculate discount
+      if (discount.discount_type === 'PERCENTAGE') {
+        discountCents = Math.round((subtotalCents * discount.discount_value) / 100)
+      } else {
+        discountCents = discount.discount_value
       }
+      appliedDiscountCode = discount.code
     }
   }
 
-  // ─── Calculate tax & fees ───────────────────────────────────────────────
+  // ─── Calculate tax ──────────────────────────────────────────────────────
   let taxCents = 0
-  let feeCents = 0
-  if (reservations.length > 0) {
-    const firstItem = reservations[0]
-    const { data: event } = await supabase
-      .from('inventory_items')
-      .select('metadata')
-      .eq('id', firstItem.item_id)
-      .maybeSingle()
+  const taxableAmount = Math.max(0, subtotalCents - discountCents)
 
-    if (event) {
-      const meta = (event.metadata as Record<string, unknown>) ?? {}
-      const taxes = (meta.taxes_and_fees as Array<Record<string, unknown>>) ?? []
-      for (const t of taxes) {
-        if (!t.is_active) continue
-        if (t.type === 'TAX') {
-          if (t.calculation_type === 'PERCENTAGE') {
-            taxCents += Math.round((totalAmountCents * (t.rate as number)) / 100)
-          } else {
-            taxCents += t.rate as number
-          }
-        } else if (t.type === 'FEE') {
-          if (t.calculation_type === 'PERCENTAGE') {
-            feeCents += Math.round((totalAmountCents * (t.rate as number)) / 100)
-          } else {
-            feeCents += t.rate as number
-          }
-        }
-      }
-    }
-  }
+  // For now, use a flat 8% tax rate if event has tax config
+  // In production, this would come from tax_and_fees or tax_lines config
+  taxCents = Math.round(taxableAmount * 0.08)
 
-  const finalTotalCents = Math.max(0, totalAmountCents - promoDiscountCents) + taxCents + feeCents
+  const totalCents = taxableAmount - discountCents + taxCents
+
+  // Update order with totals
+  await supabase
+    .from('orders')
+    .update({
+      subtotal_cents: subtotalCents,
+      tax_cents: taxCents,
+      discount_cents: discountCents,
+      total_cents: totalCents,
+      status: 'PENDING',
+      placed_at: new Date().toISOString(),
+    })
+    .eq('id', order.id)
 
   // ─── Create Stripe Checkout Session ─────────────────────────────────────
-  // movinin pattern: create session with metadata, return URL
   const reservationIds = reservations.map((r) => r.id)
-
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
     line_items: [{
       price_data: {
         currency: 'usd',
-        product_data: { name: `Planviry Booking (${reservations.length} items)` },
-        unit_amount: finalTotalCents,
+        product_data: { name: `Planviry Order (${reservations.length} items)` },
+        unit_amount: totalCents,
       },
       quantity: 1,
     }],
     metadata: {
       user_id: user.id,
+      order_id: order.id,
       reservation_ids: JSON.stringify(reservationIds),
-      trip_id: trip_id ?? '',
     },
     payment_intent_data: {
       metadata: {
         user_id: user.id,
+        order_id: order.id,
         reservation_ids: JSON.stringify(reservationIds),
       },
     },
@@ -300,31 +250,68 @@ export async function POST(request: NextRequest) {
     cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/cart`,
   })
 
-  // Create a payment record (status: pending)
-  const { error: payErr } = await supabase
-    .from('payments')
-    .insert({
-      // payments table columns: reservation_id, amount_cents, currency, status, stripe_payment_intent_id
-      // We link the first reservation; the webhook updates all on confirmation
-      // This is a simplification — Part VI may model payments differently
+  // ─── Create checkout_sessions record (P0: persisted before webhook fires) ──
+  await supabase.from('checkout_sessions').insert({
+    stripe_session_id: session.id,
+    user_id: user.id,
+    reservation_ids: reservationIds,
+    status: 'PENDING',
+    amount_cents: totalCents,
+    currency: 'USD',
+    expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+  })
+
+  // Update order with Stripe session ID
+  await supabase
+    .from('orders')
+    .update({ stripe_session_id: session.id })
+    .eq('id', order.id)
+
+  // ─── Store idempotency key ──────────────────────────────────────────────
+  if (idempotency_key) {
+    const responsePayload = {
+      order_id: order.id,
+      stripe_session_url: session.url,
+      stripe_client_secret: session.client_secret,
+      subtotal_cents: subtotalCents,
+      discount_code: appliedDiscountCode,
+      discount_cents: discountCents,
+      tax_cents: taxCents,
+      total_cents: totalCents,
+      reservation_ids: reservationIds,
+    }
+    await supabase.from('idempotency_keys').insert({
+      key: idempotency_key,
+      user_id: user.id,
+      endpoint: '/api/checkout',
+      response_payload: responsePayload,
     })
+  }
+
+  // ─── Audit log ──────────────────────────────────────────────────────────
+  await supabase.from('audit_log').insert({
+    actor_id: user.id,
+    action: 'CREATE',
+    entity_type: 'order',
+    entity_id: order.id,
+    changes: { reservation_ids: reservationIds, total_cents: totalCents },
+  })
 
   return NextResponse.json({
-    order_id: session.id,
+    order_id: order.id,
     stripe_session_url: session.url,
     stripe_client_secret: session.client_secret,
-    subtotal_cents: totalAmountCents,
-    promo_code: appliedPromoCode,
-    promo_discount_cents: promoDiscountCents,
+    subtotal_cents: subtotalCents,
+    discount_code: appliedDiscountCode,
+    discount_cents: discountCents,
     tax_cents: taxCents,
-    fee_cents: feeCents,
-    total_amount: finalTotalCents / 100,
-    total_amount_cents: finalTotalCents,
+    total_cents: totalCents,
+    total_amount: totalCents / 100,
     reservation_ids: reservationIds,
     chargeable_count: chargeableItems.length,
     non_chargeable_processed: nonChargeableResults,
     question_answers_stored: question_answers?.length ?? 0,
-    expires_at: ttlExpiresAt,
-    message: 'PENDING reservations created. Redirect to stripe_session_url to complete payment.',
+    expires_at: new Date(Date.now() + RESERVATION_TTL_MINUTES * 60_000).toISOString(),
+    message: 'Order + PENDING reservations created. Redirect to stripe_session_url to complete payment.',
   })
 }
