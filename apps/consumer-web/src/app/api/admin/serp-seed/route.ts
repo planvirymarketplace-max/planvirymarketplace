@@ -20,7 +20,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '../../lib/supabase/admin'
 
 const SERPAPI_BASE = 'https://serpapi.com/search.json'
 

@@ -12,6 +12,22 @@
 import { createBrowserClient as ssrCreateBrowserClient } from '@supabase/ssr'
 import { createServerClient as ssrCreateServerClient } from '@supabase/ssr'
 import { createClient as createSupabaseJsClient } from '@supabase/supabase-js'
+import { resolveTable } from './db-compat'
+
+/**
+ * Wrap a Supabase client so `.from('old_table')` is redirected to the
+ * new-schema table name. This is the Part XLVI compatibility layer.
+ */
+function wrapWithCompat<T extends { from: (table: string) => unknown }>(client: T): T {
+  return new Proxy(client as object, {
+    get(target: T, prop: string | symbol, receiver: unknown) {
+      if (prop === 'from') {
+        return (table: string) => (target as { from: (t: string) => unknown }).from(resolveTable(table))
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  }) as T
+}
 
 // ─── Environment Variables ──────────────────────────────────────────────────
 
@@ -67,9 +83,13 @@ export function createServerClient(cookieStore: Awaited<ReturnType<typeof import
 /**
  * Create a Supabase client with the service-role key.
  * **Bypasses Row Level Security** - only use in trusted server-side code.
+ *
+ * Wraps the client with a table-name compatibility layer (Part XLVI) that
+ * redirects old-schema table names (vendors, listings, bookings, etc.) to
+ * the live new-schema tables (vendor_accounts, inventory_items, reservations).
  */
 export function createAdminClient() {
-  return createSupabaseJsClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  return wrapWithCompat(createSupabaseJsClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY))
 }
 
 // ─── Backward-Compatible Singleton Exports ──────────────────────────────────
@@ -86,7 +106,7 @@ function lazyClient(getKey: () => string, getSecret: () => string) {
         console.warn(`[Supabase] Cannot access .${String(prop)} - env vars not configured`)
         return undefined
       }
-      const client = createSupabaseJsClient(url, key)
+      const client = wrapWithCompat(createSupabaseJsClient(url, key))
       return Reflect.get(client, prop, receiver)
     },
   })
