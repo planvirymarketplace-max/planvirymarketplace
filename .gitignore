@@ -80,3 +80,10 @@ real-app-proof.png
 # Prisma (deprecated — we use Supabase)
 packages/db/prisma/
 packages/db/db/
+
+# Sandbox artifacts (not part of Planviry)
+/.zscripts/
+/download/
+/examples/
+/mini-services/
+/worklog.md
