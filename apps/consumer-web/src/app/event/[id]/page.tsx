@@ -1,4 +1,5 @@
 import { AppLayoutShell } from '@/components/AppLayoutShell'
+import { TicketPurchasePanel } from '@/components/tickets/TicketPurchasePanel'
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
@@ -138,6 +139,13 @@ export default async function EventDetailPage({ params }: PageProps) {
               <p className="text-sm text-amber-700 leading-relaxed">{event.pleaseNote}</p>
             </div>
           )}
+        </div>
+      </section>
+
+      {/* Ticket purchase panel — wired to /api/tickets/tiers + /api/tickets/purchase */}
+      <section className="border-b border-gray-200 bg-gray-50">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8">
+          <TicketPurchasePanel eventId={id} eventTitle={event.name} />
         </div>
       </section>
 

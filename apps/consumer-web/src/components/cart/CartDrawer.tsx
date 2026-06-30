@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { X, ShoppingCart, Trash2, Calendar, MapPin, Ticket, Home, Utensils, Compass, ExternalLink } from 'lucide-react'
 import { useCart, requiresStripeCharge, type CartItemType } from '@/lib/cart-context'
+import { PromoCodeInput } from '@/components/cart/PromoCodeInput'
 
 const TYPE_CONFIG: Record<CartItemType, { label: string; icon: React.ElementType; color: string }> = {
   booking: { label: 'Vendor Booking', icon: Home, color: 'text-teal-600' },
@@ -18,6 +19,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
   const { items, removeItem, clearCart, totalAmount, totalDeposit, itemCount, chargeableItems, nonChargeableItems } = useCart()
   const router = useRouter()
   const [checkingOut, setCheckingOut] = useState(false)
+  const [promoDiscount, setPromoDiscount] = useState(0)
 
   const handleCheckout = async () => {
     setCheckingOut(true)
@@ -138,6 +140,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
 
         {items.length > 0 && (
           <div className="px-6 py-4 border-t border-gray-200 space-y-3">
+            <PromoCodeInput onApply={(_code, discount) => setPromoDiscount(discount)} />
             <div className="space-y-1.5">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">Chargeable items</span>
@@ -150,8 +153,18 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
                 </div>
               )}
               <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Subtotal</span>
+                <span className="font-bold text-black">${totalAmount.toFixed(2)}</span>
+              </div>
+              {promoDiscount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Discount</span>
+                  <span className="font-bold text-green-600">-${(promoDiscount / 100).toFixed(2)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-sm">
                 <span className="text-gray-500">Total</span>
-                <span className="font-black text-black">${totalAmount.toFixed(2)}</span>
+                <span className="font-black text-black">${(totalAmount - promoDiscount / 100).toFixed(2)}</span>
               </div>
               {totalDeposit > 0 && (
                 <div className="flex justify-between text-sm">
