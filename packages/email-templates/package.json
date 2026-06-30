@@ -1,0 +1,31 @@
+{
+  "name": "@planviry/email-templates",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "React Email templates for all Planviry transactional emails, delivered via Resend (Part II §2.1; Part XXVI §26.x Notifications).",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.tsx"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "dev": "email dev --dir ./src --port 3031"
+  },
+  "dependencies": {
+    "@planviry/types": "workspace:*",
+    "@planviry/ui": "workspace:*",
+    "@react-email/components": "^0.0.34",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}

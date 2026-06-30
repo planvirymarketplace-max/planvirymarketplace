@@ -1,0 +1,47 @@
+# Planviry Supabase Project Config (Part II §2.1 — supabase/)
+
+# This is a scaffold placeholder. The full Supabase project configuration is
+# authored in Part VI (Data Layer) + Part XXX (Infrastructure).
+# Run `supabase init` once the Supabase CLI is available in the build env to
+# generate the full config.toml. Until then, this file documents the boundary.
+
+project_id = "planviry"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed/seed.sql"]
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://preview-*.space-z.ai"]
+jwt_expiry = 3600
+refresh_token_rotation_enabled = true
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = true
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[realtime]
+enabled = true
+
+[functions]
+# Edge functions are deployed from functions/<name>/ per Part II §2.1.
+verify_jwt = true

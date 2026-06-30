@@ -1,0 +1,21 @@
+{
+  "name": "@planviry/analytics",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Event tracking catalog, type-safe emitters, and PostHog/Segment wrappers for Planviry (Part II §2.1; Part XXVII §27.x TinyBird Analytics).",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@planviry/types": "workspace:*",
+    "zod": "^4.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

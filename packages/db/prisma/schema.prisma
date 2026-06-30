@@ -1,0 +1,69 @@
+// =============================================================================
+// Planviry — Prisma Schema (packages/db)
+// =============================================================================
+// Spec references:
+//   Part II  §2.1   — Repository Architecture (packages/db owns schema)
+//   Part III        — Domain Definition (DOM-001 … DOM-020 are the entity
+//                     catalog; full DDL is authored in Part VI)
+//   Part VI  §6.x   — Data Layer / Database Specification (PENDING — Parts 4+
+//                     are out of scope for the current scaffold step)
+//
+// The full Planviry domain schema (InventoryItem, Reservation, ItinerarySession,
+// Cart, VendorAccount, Event, ServiceTicket, …) is enumerated in Part III and
+// will be translated to DDL in Part VI. Until Part VI is implemented, this
+// file carries the minimal working models required to keep the dev server
+// functional and to prove the @planviry/db package boundary is wired correctly.
+//
+// Database: SQLite (local dev). Production target is Supabase / PostgreSQL 15+
+// (Part I §1.1.5 Assumptions; Part XXX §30.6). The provider switch is a Part VI
+// migration task — not a schema-shape decision, so it does not block Parts 0–3.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  // Generate to the ROOT node_modules/.prisma/client so the hoisted
+  // @prisma/client (resolved by Next.js / Bun at the monorepo root) can find
+  // the generated client. This is the standard Prisma-in-monorepo resolution.
+  output   = "../../../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// DOM-001 — User  (Owner: Auth Module, Part VII)
+// BR-U-001: Email must be unique.
+// Lifecycle: Anonymous → Registered → Onboarded → [Active | Suspended | Deleted]
+// (Stub — full column set + RLS authored in Part VI / Part VII.)
+// -----------------------------------------------------------------------------
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique // BR-U-001
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Convenience relation kept from the bootstrapped schema; replaced by the
+  // full domain model in Part VI.
+  posts Post[]
+}
+
+// -----------------------------------------------------------------------------
+// Placeholder model — replaced by InventoryItem (DOM-003) in Part VI.
+// Kept only so `bun run db:push` produces a non-empty migration baseline.
+// -----------------------------------------------------------------------------
+model Post {
+  id        String   @id @default(cuid())
+  title     String
+  content   String?
+  published Boolean  @default(false)
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([authorId])
+}

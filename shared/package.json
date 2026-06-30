@@ -1,0 +1,28 @@
+{
+  "name": "@planviry/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-cutting utilities for Planviry: logger, error classes, constants, date helpers (Part II §2.1 — shared/).",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./logger": "./logger.ts",
+    "./errors": "./errors.ts",
+    "./constants": "./constants.ts",
+    "./dates": "./dates.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@planviry/types": "workspace:*",
+    "zod": "^4.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

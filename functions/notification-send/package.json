@@ -1,0 +1,19 @@
+{
+  "name": "@planviry/fn-notification-send",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Supabase Edge Function — triggered by the notification queue; delivers email/push/in-app (Part II §2.1; Part XXVI §26.x Notifications).",
+  "main": "./index.ts",
+  "scripts": {
+    "dev": "supabase functions serve notification-send",
+    "deploy": "supabase functions deploy notification-send",
+    "build": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "imports": {
+    "@planviry/types": "workspace:*",
+    "@planviry/shared": "workspace:*"
+  },
+  "devDependencies": { "typescript": "^5" }
+}

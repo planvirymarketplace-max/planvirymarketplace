@@ -1,0 +1,35 @@
+{
+  "name": "@planviry/vendor-portal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Planviry vendor portal — vendor dashboard, PMS grid, booking calendar, listing management, AI-assist surface (Part II §2.1; Part XLVIII Vendor Portal UI).",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@planviry/db": "workspace:*",
+    "@planviry/types": "workspace:*",
+    "@planviry/ui": "workspace:*",
+    "@planviry/search": "workspace:*",
+    "@planviry/analytics": "workspace:*",
+    "@planviry/shared": "workspace:*",
+    "next": "^16.1.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.0.2",
+    "zustand": "^5.0.6"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "^16.1.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

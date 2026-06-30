@@ -1,0 +1,13 @@
+{
+  "name": "@planviry/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared ESLint, Prettier, TypeScript, and Tailwind configs for the Planviry monorepo (Part II §2.1).",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./tsconfig": "./tsconfig.json"
+  },
+  "files": ["index.ts", "tsconfig.json"]
+}

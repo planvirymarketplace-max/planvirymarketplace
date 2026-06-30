@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@planviry/db": ["../../packages/db/index.ts"],
+      "@planviry/db/*": ["../../packages/db/*"],
+      "@planviry/types": ["../../packages/types/src/index.ts"],
+      "@planviry/types/*": ["../../packages/types/src/*"],
+      "@planviry/ui": ["../../packages/ui/src/index.ts"],
+      "@planviry/ui/*": ["../../packages/ui/src/*"],
+      "@planviry/search": ["../../packages/search/src/index.ts"],
+      "@planviry/analytics": ["../../packages/analytics/src/index.ts"],
+      "@planviry/email-templates": ["../../packages/email-templates/src/index.ts"],
+      "@planviry/shared": ["../../shared/index.ts"],
+      "@planviry/shared/*": ["../../shared/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}

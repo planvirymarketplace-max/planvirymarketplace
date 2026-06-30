@@ -1,0 +1,19 @@
+{
+  "name": "@planviry/fn-search-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Supabase Edge Function — triggered on inventory insert/update; pushes document to Algolia (Part II §2.1; Part XVII §17.4 Search Ingestion Pipeline).",
+  "main": "./index.ts",
+  "scripts": {
+    "dev": "supabase functions serve search-ingest",
+    "deploy": "supabase functions deploy search-ingest",
+    "build": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "imports": {
+    "@planviry/types": "workspace:*",
+    "@planviry/shared": "workspace:*"
+  },
+  "devDependencies": { "typescript": "^5" }
+}

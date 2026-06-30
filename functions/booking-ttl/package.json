@@ -1,0 +1,19 @@
+{
+  "name": "@planviry/fn-booking-ttl",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Supabase Edge Function — TTL enforcement triggered by pg_cron / Supabase scheduled functions (Part II §2.1; Part V FSM; Part XIV Background Jobs).",
+  "main": "./index.ts",
+  "scripts": {
+    "dev": "supabase functions serve booking-ttl",
+    "deploy": "supabase functions deploy booking-ttl",
+    "build": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "imports": {
+    "@planviry/types": "workspace:*",
+    "@planviry/shared": "workspace:*"
+  },
+  "devDependencies": { "typescript": "^5" }
+}

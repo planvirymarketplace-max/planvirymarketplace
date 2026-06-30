@@ -1,0 +1,717 @@
+PART 0 — Objective & Completion Definition
+
+This Part defines what 'done' means for every subsequent Part. No Part
+is considered complete unless every field, rule, and artifact enumerated
+here has been satisfied for that Part's scope.
+
+0.1 Objective Statement
+
+Planviry is an orchestrator platform — a single timeline that holds
+every component of a planned occasion (lodging, flights, ticketed
+events, venues, vendors, dining) in one cart and one itinerary. The
+Implementation Specification () is a deterministic build contract: every
+decision about what to build, why, in what order, and how to validate it
+is recorded here before any implementation task begins. No
+implementation task should require assumptions beyond what this document
+specifies.
+
+  NOTE: Derived from Foundation Narrative §1. The 'orchestrator' framing
+  is load-bearing: every architectural decision must be evaluated
+  against whether it reinforces or weakens the cross-vertical cart and
+  itinerary as the platform's structural moat.
+
+0.2 Acceptance Criterion
+
++-----------------------------------------------------------------------+
+| Global Acceptance Criterion (GAC-001)                                 |
+|                                                                       |
+| No engineer, AI agent, or contractor should need to make an           |
+| undocumented decision to complete any task described in this          |
+| specification. If a task requires information not present in this     |
+| document, that is a specification gap — file it as SPEC-GAP-XXXXX,    |
+| halt the task, and resolve the gap before proceeding.                 |
++-----------------------------------------------------------------------+
+
+0.3 Completion Definition Checklist
+
+Every Part of this specification must satisfy all items below before it
+is considered complete and before any downstream Part that depends on it
+may begin implementation:
+
+  --------------------------------------------------------------------------
+  #      Completion Criterion                      Validation Method
+  ------ ----------------------------------------- -------------------------
+  C-01   Every business rule has a unique ID       Grep for BR- pattern;
+         (BR-XXXXXX format)                        count matches against
+                                                   rule inventory
+
+  C-02   Every entity has a schema definition      Schema Catalog (Part VI)
+                                                   contains an entry for
+                                                   every domain object in
+                                                   Part III
+
+  C-03   Every schema has migrations               Migration files exist;
+                                                   numbered and ordered per
+                                                   Part VI.5
+
+  C-04   Every migration has a rollback            Each migration file has a
+                                                   corresponding down()
+                                                   function
+
+  C-05   Every API endpoint has a contract         Part XI entry exists with
+                                                   method, route, input
+                                                   schema, output schema,
+                                                   error codes
+
+  C-06   Every function has implementation details Part X service entries or
+                                                   Part XII edge function
+                                                   entries contain
+                                                   step-by-step logic
+
+  C-07   Every interaction has defined behavior    Part XXIV UX flow entry
+                                                   exists covering trigger →
+                                                   validation → feedback →
+                                                   rollback
+
+  C-08   Every failure has a recovery path         Part XXXIII failure-mode
+                                                   registry contains an
+                                                   entry with recovery
+                                                   procedure
+
+  C-09   Every dependency is documented            Part XXXVII dependency
+                                                   graph contains node
+                                                   entries for all
+                                                   dependencies
+
+  C-10   Every requirement maps to tests           Part XXXVI traceability
+                                                   matrix links REQ → test
+                                                   case IDs
+
+  C-11   Every deployment step is ordered          Part XXXI deployment
+                                                   order is complete; no
+                                                   circular dependencies
+
+  C-12   Every monitoring rule is defined          Part XXIX alert
+                                                   thresholds contain
+                                                   entries for every
+                                                   critical path
+
+  C-13   Every artifact is versioned               All schema, API, and
+                                                   component artifacts carry
+                                                   version fields
+
+  C-14   No implementation decision is left        GAC-001 audit passes:
+         unspecified                               zero open SPEC-GAP items
+                                                   in the relevant Part
+  --------------------------------------------------------------------------
+
+0.4 Master Decomposition Method
+
+Every system in this specification is decomposed in the following order.
+No implementation may begin until decomposition is complete to the level
+of implementation steps:
+
+1.  Enumerate every system
+
+2.  Decompose each system into components
+
+3.  Decompose each component into behaviors
+
+4.  Decompose each behavior into state transitions
+
+5.  Decompose each state transition into implementation steps
+
+6.  Define every dependency (input → output contracts)
+
+7.  Define every artifact produced
+
+8.  Define every validation rule
+
+9.  Define every failure mode
+
+10. Define every recovery path
+
+11. Define every test (unit, integration, E2E, load, chaos)
+
+12. Define every deployment dependency
+
+13. Define every operational procedure
+
+14. Cross-reference everything with unique IDs (BR-, REQ-, SC-, API-,
+    COMP-, TEST-)
+
+PART I — Governance (Layer 0)
+
+1.1 Vision
+
+1.1.1 Product Purpose
+
+Planviry is a multi-vertical occasion orchestration platform. It is not
+a vendor directory, not a travel site, and not a ticketing platform. It
+is the first platform in the market with a cart and itinerary
+simultaneously aware of lodging, transit, ticketed events, venues,
+vendors, dining, and experiences — making the cross-vertical booking
+session structurally impossible to replicate on any single-vertical
+competitor.
+
+1.1.2 Scope
+
+  -----------------------------------------------------------------------
+  Module            What It Owns                   Market Equivalent
+                                                   Displaced
+  ----------------- ------------------------------ ----------------------
+  PMS (Property     Room/unit state, housekeeping, Hotel PMS (Opera,
+  Management)       guest profiles                 Cloudbeds)
+
+  Booking Engine    Calendar, slot generation,     Cal.com, Calendly
+                    availability windows           
+
+  Travel Management Flights, hotel IDs, tickets as Expedia, Google Travel
+                    one itinerary session          
+
+  Reservation       Status lifecycle, group        OpenTable reservations
+  Management        permissions, cost-splitting    
+
+  Maintenance       Work orders, room-status       Maintenance management
+  Management        triggers, vendor staff tasks   tools
+
+  Ticketing         Event tickets (Hi.Events       Ticketmaster,
+  Management        model) + operational tasks     Eventbrite
+                    (Peppermint model)             
+
+  Vendor Listing    Multi-tenant marketplace,      Peerspace, GigSalad
+  Management        onboarding, partitioned        
+                    visibility                     
+
+  Events Booking &  Event creation, capacity,      Hi.Events, Eventbrite
+  Management        recurring, registration        
+  -----------------------------------------------------------------------
+
+1.1.3 Explicit Non-Goals
+
+The following are NOT within scope of this platform and must not be
+implemented unless this section is formally amended:
+
+-   Competing head-on with Ticketmaster for primary ticket distribution
+    of major national tours — integration only
+
+-   Building a standalone CRM or HR system — vendor staff management is
+    scoped to operational tasks only
+
+-   Processing payroll for vendor staff — payment scope is limited to
+    Stripe Connect marketplace payouts
+
+-   White-label resale of platform to third-party operators in v1 —
+    deferred to Part XXXIX (Future Expansion)
+
+-   Native mobile application (iOS/Android) in v1 — mobile-responsive
+    web only; native deferred to Part XXXIX
+
+-   International multi-currency support in v1 — USD primary; i18n
+    deferred to Part XXXIX
+
+-   Building a content management system for editorial travel content —
+    content is data-driven, not CMS-driven
+
+1.1.4 Definitions & Terminology
+
+  -----------------------------------------------------------------------
+  Term               Definition
+  ------------------ ----------------------------------------------------
+  Occasion           Any planned social, professional, or recreational
+                     event that requires two or more vendor/service
+                     bookings
+
+  Cart               The cross-vertical container holding all line items
+                     for a single checkout session, regardless of
+                     category
+
+  Itinerary          The chronological view of all bookings across all
+                     verticals, attached to a single ItinerarySession
+
+  Vertical           A product category served by the platform: Stays,
+                     Flights, Experiences, Venues, Vendors, Dining,
+                     Tickets
+
+  Vertical Row       The persistent UI control that switches the content
+                     feed in place without navigation — NOT a nav element
+
+  Orchestration      The persistent Plan bar + Vertical Row + Facet Pills
+  Shell              that live on every landing page
+
+  InventoryItem      The polymorphic base entity from which every
+                     bookable thing inherits (hotel room, ticket, vendor
+                     service)
+
+  Reservation Ledger The unified table of all bookings across all
+                     verticals, shared by all modules
+
+  Overture Seeding   The bulk-import of unverified vendor listings from
+                     third-party data, which vendors later claim
+
+  Claimed Listing    A vendor-operated listing that has completed the
+                     profile claim flow and is fully managed in the
+                     portal
+
+  TTL                Time-To-Live: the window after which a pending
+                     booking expires and held inventory is released
+
+  FSM                Finite State Machine: the explicit set of states and
+                     allowed transitions governing entity lifecycles
+
+  RPC                Remote Procedure Call: Supabase database functions
+                     callable from the API layer
+
+  RLS                Row-Level Security: Postgres policies enforcing
+                     tenant and role isolation at the database layer
+
+  Two-Door Entry     The dual entry model: search-first (header bar) and
+                     browse-first (mega menu) — both gate on location
+
+                     Implementation Specification: this document
+  -----------------------------------------------------------------------
+
+1.1.5 Assumptions
+
+-   The existing Next.js 16 / Supabase / Algolia frontend stack is
+    retained and retrofitted (not replaced) per Part XLVI
+
+-   Supabase (PostgreSQL 15+) is the sole database tier; no secondary
+    relational database is introduced
+
+-   Stripe is the sole payment processor; Stripe Connect is used for
+    multi-vendor marketplace payouts
+
+-   Algolia is the search provider for the initial build; the federated
+    ranking decision (Part XLII Conflict #7) is unresolved and may
+    require re-evaluation
+
+-   The six reference repositories (Hi.Events, Cal.com, movinin,
+    hotel-back-office, Peppermint, TicketiHub) are blueprints only — no
+    service is run or imported as a dependency
+
+-   Initial launch targets English-language, USD markets only
+
+1.1.6 Constraints
+
+-   CONSTRAINT-001: No implementation decision may be made that breaks
+    the cross-vertical cart invariant — every InventoryItem must be
+    addable to the same Cart regardless of category
+
+-   CONSTRAINT-002: No category page may render without a location being
+    provided — the location gate is mandatory at both API and client
+    guard layers
+
+-   CONSTRAINT-003: The Vertical Row may only swap the content feed in
+    place — it must never trigger full-page navigation or URL change to
+    a different route
+
+-   CONSTRAINT-004: Vendor dashboards must be account-scoped at the RLS
+    layer — no vendor may see another vendor's dashboard data
+
+-   CONSTRAINT-005: All booking state transitions must go through the
+    Reservation FSM (Part V) — no direct status field writes from client
+    code
+
+1.2 Executive Architecture
+
+1.2.1 High-Level Architecture
+
+Planviry is a monorepo Next.js application backed by Supabase
+(Postgres + Auth + Storage + Realtime + Edge Functions). It exposes a
+public-facing consumer web app, a vendor portal web app, and an internal
+admin interface — all sharing one Supabase project and one domain
+schema. External integrations (Ticketmaster, Expedia content, Algolia,
+Stripe) are consumed via API and normalized into the platform's own
+schema — never treated as live pass-through queries at render time.
+
+  ------------------------------------------------------------------------
+  Layer            Technology               Responsibility
+  ---------------- ------------------------ ------------------------------
+  Frontend         Next.js 16, shadcn/ui,   Guest-facing catalog,
+  (Consumer)       Tailwind, Zustand,       discovery, booking, cart,
+                   TanStack Query           itinerary
+
+  Frontend (Vendor Next.js 16, same stack,  Vendor dashboard, listing
+  Portal)          separate app/ boundary   management, PMS, service
+                                            tickets
+
+  Frontend (Admin) Next.js 16, same stack,  Platform moderation, taxonomy
+                   role-gated               management, analytics
+
+  API Layer        Next.js API Routes +     Business logic, validation,
+                   Supabase RPC             state transition enforcement
+
+  Edge Functions   Supabase Edge Functions  Webhooks, async triggers,
+                   (Deno)                   external API sync, TTL sweeps
+
+  Database         Supabase / PostgreSQL    All persistent state; RLS for
+                   15+                      tenant isolation
+
+  Search           Algolia                  Full-text, geo, faceted search
+                                            across all inventory
+
+  Auth             Supabase Auth (native)   JWT lifecycle, session
+                                            management, OAuth, magic link
+
+  Payments         Stripe + Stripe Connect  Consumer checkout,
+                                            multi-vendor split payouts
+
+  Storage          Supabase Storage         Listing images, media uploads,
+                   (S3-compatible)          documents
+
+  Realtime         Supabase Realtime        Live booking status, cart
+                   (WebSocket)              sync, presence
+
+  Email            Resend                   Transactional email:
+                                            confirmations, notifications,
+                                            digests
+
+  Maps             MapLibre                 Venue/listing geo display,
+                                            location-scoped search
+  ------------------------------------------------------------------------
+
+1.2.2 Component Map
+
+  -------------------------------------------------------------------------------
+  Component         App Boundary               Owns
+  ----------------- -------------------------- ----------------------------------
+  consumer-web      apps/consumer-web          All guest-facing pages,
+                                               orchestration shell, booking flow,
+                                               cart, itinerary UI
+
+  vendor-portal     apps/vendor-portal         Vendor dashboard, PMS grid,
+                                               booking calendar, listing
+                                               management, AI-assist surface
+
+  admin-portal      apps/admin-portal          Moderation queue, taxonomy engine
+                                               UI, analytics, seeding management
+
+  api               apps/api (or Next.js route REST + RPC endpoints shared across
+                    handlers)                  all apps
+
+  db                packages/db                Drizzle/SQL schema definitions,
+                                               migration files, seed scripts, RLS
+                                               policies
+
+  ui                packages/ui                Shared shadcn component library,
+                                               design system tokens
+
+  search            packages/search            Algolia client wrapper, index
+                                               schema definitions, ingestion
+                                               helpers
+
+  analytics         packages/analytics         Event tracking, Segment/PostHog
+                                               wrapper, event catalog
+
+  email-templates   packages/email-templates   Resend React Email templates
+
+  workers           workers/                   Background jobs: TTL sweep, search
+                                               re-index, notification digest,
+                                               sync
+
+  functions         functions/                 Supabase Edge Functions: webhooks,
+                                               Stripe events, external sync
+  -------------------------------------------------------------------------------
+
+1.2.3 Request Lifecycle
+
+15. User action triggers client-side event (click, form submit, URL
+    change)
+
+16. TanStack Query dispatches API call (or Supabase client RPC directly
+    for reads)
+
+17. Next.js API Route (or Edge Function) receives request
+
+18. Auth middleware validates JWT — rejects with 401 if invalid or
+    expired
+
+19. Authorization check: RLS via Supabase, or explicit role check in
+    route handler
+
+20. Input validation (Zod schema) — rejects with 422 if invalid
+
+21. Business rule evaluation (BR- checks) — rejects with 409/400 if
+    violated
+
+22. Database transaction: read-lock on inventory, write state
+    transition, emit event
+
+23. Post-write: search index update queued, notification queued,
+    analytics event emitted
+
+24. Response: structured JSON (success payload or structured error with
+    code + message)
+
+25. Client: TanStack Query updates cache optimistically if applicable;
+    renders new state
+
+1.2.4 Security Model Overview
+
+-   Authentication: Supabase Auth JWTs — short-lived access tokens (1h),
+    refresh tokens (30d), rotation on use
+
+-   Authorization: Postgres RLS policies enforce row-level isolation by
+    user_id, vendor_id, and role — no application-layer bypass possible
+
+-   Tenant Isolation: every vendor's data is scoped by vendor_id in RLS
+    — cross-tenant reads are impossible at the DB layer
+
+-   Secrets: environment variables via Supabase secrets manager — never
+    in source code or client bundles
+
+-   Input: all external inputs validated through Zod schemas before any
+    database or business logic contact
+
+-   Rate Limiting: enforced at Edge Function level and Supabase
+    connection pooler — see Part XXVIII for thresholds
+
+1.3 Architecture Principles
+
+  ------------------------------------------------------------------------
+  Principle       Rule                             Rationale
+  --------------- -------------------------------- -----------------------
+  Moat First      Every architectural decision     The cart/itinerary moat
+                  must be evaluated: does it       is the only structural
+                  reinforce or weaken the          differentiator; it must
+                  cross-vertical cart?             never be sacrificed for
+                                                   local convenience
+
+  State in        All canonical state lives in     Prevents split-brain
+  Postgres        Postgres. Client state is        between client cache
+                  derived, never authoritative.    and database truth
+
+  FSM Enforcement No state field may be written    Prevents illegal state
+                  directly. All transitions go     transitions and audit
+                  through defined FSM functions.   gaps
+
+  Location Gate   No inventory query renders       Core UX invariant:
+                  without a location parameter.    every session is scoped
+                  Enforced at API + client guard.  to a place
+
+  Vertical Lens,  The Vertical Row swaps feed      Preserves session
+  Not Navigation  content in place. It never       context across
+                  changes the page route.          verticals — the
+                                                   mechanism of
+                                                   orchestration made
+                                                   visible
+
+  Blueprint, Not  Reference repos (Hi.Events,      Avoids version
+  Dependency      Cal.com, etc.) are patterns to   coupling, license risk,
+                  translate, never runtime         and incompatible data
+                  imports.                         models
+
+  RLS as Last     Application-layer auth checks    Defense in depth; a bug
+  Defense         exist, but RLS policies are the  in application auth
+                  authoritative access control.    cannot leak
+                                                   cross-tenant data
+
+  Fail Loudly     Every failure mode has an        Silent failures are
+                  explicit error code, user        harder to debug and
+                  message, and recovery path.      worse for users than
+                                                   explicit, recoverable
+                                                   errors
+
+  No              Category landing pages without a Enforces the two-door
+  Zero-Location   location are an error state, not entry model; prevents
+  Page            a valid empty state.             useless unscoped
+                                                   results
+  ------------------------------------------------------------------------
+
+1.4 Architectural Decision Records (ADR)
+
+Each ADR below records a decision that has been made and must not be
+re-litigated without a formal amendment process. Open conflicts (from
+Part XLII) are listed separately in Part I.4.2.
+
+1.4.1 Resolved ADRs
+
+ADR-001: Supabase Auth over Clerk
+
+  -----------------------------------------------------------------------
+  Field              Value
+  ------------------ ----------------------------------------------------
+  Problem            Two identity providers were evaluated: Clerk (per
+                     TicketiHub reference) and Supabase Auth (native)
+
+  Alternatives       Clerk: better DX, built-in UI components, hosted
+                     user management. Supabase Auth: native Postgres
+                     integration, eliminates user-sync problem.
+
+  Decision           Supabase Auth
+
+  Rationale          Clerk requires maintaining a user sync between
+                     Clerk's store and Supabase's auth.users table. Any
+                     desync creates a support and security surface.
+                     Supabase Auth writes directly to auth.users, which
+                     is the same table RLS policies reference — no sync
+                     layer required.
+
+  Consequences       We build our own auth UI (sign-up, sign-in, magic
+                     link, OAuth flows) in shadcn components. No Clerk
+                     billing dependency.
+
+  Status             RESOLVED
+  -----------------------------------------------------------------------
+
+ADR-002: Derived Status + Stored Canonical Status
+
+  -----------------------------------------------------------------------
+  Field              Value
+  ------------------ ----------------------------------------------------
+  Problem            Hi.Events stores derived status in a column (fast to
+                     query, stale-data risk). hotel-back-office computes
+                     status at runtime from sub-entity states (always
+                     fresh, no index to query against).
+
+  Decision           Both: store a canonical_status column AND provide a
+                     computed display_status via RPC/materialized view
+
+  Rationale          canonical_status enables indexed queries and
+                     filtering. computed display_status catches edge
+                     cases where sub-entity state has advanced but the
+                     canonical column hasn't been updated yet. The RPC is
+                     the source of truth for display; canonical_status is
+                     the source of truth for queries.
+
+  Status             RESOLVED
+  -----------------------------------------------------------------------
+
+ADR-003: Polymorphic Inventory Model
+
+  -----------------------------------------------------------------------
+  Field              Value
+  ------------------ ----------------------------------------------------
+  Problem            Hi.Events models quantity-based ticket inventory.
+                     movinin models date-range resource blocking. These
+                     are fundamentally different models that must coexist
+                     for a cross-vertical cart.
+
+  Decision           Support both natively in the InventoryItem schema
+                     using a category enum and category-specific metadata
+                     JSONB
+
+  Rationale          Forcing all inventory into either a quantity model
+                     or a date-range model breaks at least one category.
+                     The polymorphic model with per-category validation
+                     rules on the metadata JSONB satisfies both without
+                     schema compromise.
+
+  Consequences       Part XLIII.2 defines the complete polymorphic
+                     schema. Adding a new category requires a new enum
+                     value and metadata validation rule — not a schema
+                     migration.
+
+  Status             RESOLVED
+  -----------------------------------------------------------------------
+
+ADR-004: Notifications — Peppermint Fan-Out + movinin 3-Channel Delivery
+
+  -----------------------------------------------------------------------
+  Field              Value
+  ------------------ ----------------------------------------------------
+  Problem            Hi.Events implements tier-limited notification
+                     counts. Peppermint implements a fan-out queue.
+                     movinin implements 3-channel (in-app, email, push)
+                     delivery. All three were evaluated.
+
+  Decision           Peppermint fan-out mechanism combined with movinin
+                     3-channel delivery. Hi.Events tier-limiting
+                     explicitly rejected.
+
+  Rationale          Hi.Events' tier approach is an OTA monetization
+                     mechanism (pay more for more notifications) that is
+                     not relevant to this platform's model. Peppermint's
+                     fan-out correctly handles multi-recipient events
+                     (e.g., all group members on an itinerary get
+                     notified of a booking change). movinin's 3-channel
+                     model maps to the platform's actual delivery
+                     surface.
+
+  Status             RESOLVED
+  -----------------------------------------------------------------------
+
+1.4.2 Open ADRs (Conflicts — Must Be Resolved Before Dependent Parts
+Build)
+
+CONFLICT-005: Geo + Booking-Overlap Logic on One Reservation Row
+
+  -----------------------------------------------------------------------
+  Field              Value
+  ------------------ ----------------------------------------------------
+  Domains in         Hi.Events (no geo modeling at all) vs. movinin
+  Conflict           (checkIn/checkOut overlap, night-by-night stays
+                     only)
+
+  Nature of          If geo-scoping AND overlap-checking must live on the
+  Collision          same Reservation row for cross-vertical bookings,
+                     neither reference repo's row design handles both
+                     simultaneously. A hotel night has a date-range
+                     overlap constraint. A concert ticket has a geo
+                     constraint but no overlap (multiple tickets to same
+                     event are valid). A venue booking has both.
+
+  Resolution         Part VI schema finalization (Reservation table DDL)
+  Required By        and Part XLIII.3 (Unified Reservation Ledger)
+
+  Status             OPEN — must be resolved before Part VI and Part
+                     XLIII.3 are written
+  -----------------------------------------------------------------------
+
+CONFLICT-006: Multi-Vendor Split Payouts from One Cart
+
+  -----------------------------------------------------------------------
+  Field              Value
+  ------------------ ----------------------------------------------------
+  Domains in         Hi.Events Stripe Connect (one organizer, one payout
+  Conflict           per order) vs. TicketiHub single-merchant checkout
+
+  Nature of          Neither reference demonstrates splitting one Stripe
+  Collision          checkout session across multiple connected accounts.
+                     A cart containing a hotel, a DJ, and a venue booking
+                     must route payment to three different Stripe Connect
+                     accounts in a single transaction.
+
+  Resolution         Part XLIII.5 (Cart Service Contract) and Part XI
+  Required By        (payment API endpoints)
+
+  Candidate          Option A: Single Stripe payment intent with
+  Solutions          post-capture transfer splits. Option B: Multiple
+                     payment intents, one per vendor, coordinated at
+                     checkout. Option C: Platform collects full amount,
+                     distributes via Stripe Transfer API post-settlement.
+
+  Status             OPEN — must be resolved before Part XLIII.5 is
+                     written
+  -----------------------------------------------------------------------
+
+CONFLICT-007: Federated Search Ranking
+
+  -----------------------------------------------------------------------
+  Field              Value
+  ------------------ ----------------------------------------------------
+  Domains in         Single Algolia index with category facet vs.
+  Conflict           multiple indices merged at query time
+
+  Nature of          When a query must rank a DJ, a hotel night, and a
+  Collision          concert ticket against the same input, single-index
+                     boosting is insufficient — a DJ's relevance signals
+                     (reviews, response rate) are not comparable to a
+                     hotel's (star rating, cancellation policy).
+                     Cross-index merging adds latency and complexity.
+
+  Resolution         Part VI (Algolia index schema) and Part XVII (Search
+  Required By        spec) — must be resolved before either is written
+
+  Status             OPEN — must be resolved before Part XVII and the
+                     Part VI search-index section are written
+  -----------------------------------------------------------------------
+
+PART II — Repository Architecture
+
+2.1 Repository Tree
+
+The platform is a monorepo managed with Turborepo (or equivalent). The
+following tree is the canonical structure. Every directory below must
+exist in the repository before any implementation work begins in that

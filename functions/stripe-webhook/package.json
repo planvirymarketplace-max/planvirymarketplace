@@ -1,0 +1,21 @@
+{
+  "name": "@planviry/fn-stripe-webhook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Supabase Edge Function — handles Stripe payment webhooks; updates reservation and payout state (Part II §2.1; Part XII §12.x; Part XLII §42.3 — TicketiHub pattern).",
+  "main": "./index.ts",
+  "scripts": {
+    "dev": "supabase functions serve stripe-webhook",
+    "deploy": "supabase functions deploy stripe-webhook",
+    "build": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "imports": {
+    "@planviry/types": "workspace:*",
+    "@planviry/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}
