@@ -1,25 +1,17 @@
 /**
  * Part XI §11.3.6 — GET /api/v1/search
- *
- * Primary full-text + faceted search across all published InventoryItems.
- * Auth: optional. Rate: 300/min/IP (burst 500/10s).
- *
- * ⚠ BLOCKED: CONFLICT-007 (federated search ranking) must be resolved before
- * Algolia index schema is finalized. Endpoint contract is stable; backing
- * implementation detail depends on that resolution.
- *
- * Fallback: if Algolia unavailable, fall back to Postgres pg_trgm; response
- * includes meta.degraded_mode: true.
+ * Primary full-text + faceted search. Uses Postgres ILIKE + pg_trgm (Algolia integration in Part XVII).
+ * Auth: optional. Rate: 300/min/IP. BR-GLOBAL-001: location required.
+ * P95 < 150ms (Algolia); < 1500ms (DB fallback).
  */
-
 import type { NextRequest } from "next/server";
-import { randomUUID } from "crypto";
 import { ok } from "@/lib/api/envelope";
-import { zodErrors, LOCATION_REQUIRED, QUERY_TOO_SHORT, RATE_LIMITED, INTERNAL_ERROR, error
-} from "@/lib/api/errors";
+import { zodErrors, LOCATION_REQUIRED, QUERY_TOO_SHORT, RATE_LIMITED, INTERNAL_ERROR } from "@/lib/api/errors";
 import { getAuthContext } from "@/lib/api/auth";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/api/rate-limit";
 import { SearchQuery } from "@/lib/api/schemas";
+import { supabase } from "@planviry/db";
+import { randomUUID } from "crypto";
 
 export async function GET(req: NextRequest) {
   const auth = getAuthContext(req);
@@ -28,9 +20,9 @@ export async function GET(req: NextRequest) {
 
   const url = new URL(req.url);
   const params: Record<string, string | string[] | undefined> = {};
-  url.searchParams.forEach((value, key) => {
-    const existing = params[key];
-    params[key] = existing ? Array.isArray(existing) ? [...existing, value] : [existing, value] : value;
+  url.searchParams.forEach((v, k) => {
+    const existing = params[k];
+    params[k] = existing ? Array.isArray(existing) ? [...existing, v] : [existing, v] : v;
   });
 
   const parsed = SearchQuery.safeParse(params);
@@ -40,20 +32,64 @@ export async function GET(req: NextRequest) {
     if (!params.q || params.q.length < 1) return QUERY_TOO_SHORT();
     return zodErrors(parsed.error);
   }
-
-  const { q, page, per_page, sort } = parsed.data;
+  const { q, page, per_page, category, price_min_cents, price_max_cents, location_id, sort } = parsed.data;
 
   try {
-    // Part XVII: query Algolia (or Postgres pg_trgm fallback).
-    // CONFLICT-007: single index with category facet vs. multi-index merge — UNRESOLVED.
-    // Until Part XVII: return empty result set with proper envelope.
+    // Postgres full-text search via ILIKE on title + description (pg_trgm fallback per Part XVII §17.21)
+    let query = supabase
+      .from("inventory_items")
+      .select(`
+        id, title, slug, category, base_price_cents, quality_score,
+        vendor_accounts!inner(name, slug),
+        locations!inner(name, region),
+        media_assets(url, is_primary)
+      `, { count: "exact" })
+      .eq("status", "PUBLISHED")
+      .or(`title.ilike.%${q}%,description.ilike.%${q}%`);
+
+    if (location_id) query = query.eq("location_id", location_id);
+    if (category && category.length > 0) query = query.in("category", category);
+    if (price_min_cents !== undefined) query = query.gte("base_price_cents", price_min_cents);
+    if (price_max_cents !== undefined) query = query.lte("base_price_cents", price_max_cents);
+
+    if (sort === "price_asc") query = query.order("base_price_cents", { ascending: true });
+    else if (sort === "price_desc") query = query.order("base_price_cents", { ascending: false });
+    else if (sort === "newest") query = query.order("created_at", { ascending: false });
+    else query = query.order("quality_score", { ascending: false });
+
+    const offset = (page - 1) * per_page;
+    query = query.range(offset, offset + per_page - 1);
+
+    const { data, count, error } = await query;
+    if (error) { console.error("[search GET]", error); return INTERNAL_ERROR(); }
+
+    // Compute facets
+    const { data: allCats } = await supabase
+      .from("inventory_items")
+      .select("category")
+      .eq("status", "PUBLISHED")
+      .eq("location_id", location_id ?? "");
+    const catCounts: Record<string, number> = {};
+    for (const r of allCats ?? []) { catCounts[(r as { category: string }).category] = (catCounts[(r as { category: string }).category] ?? 0) + 1; }
+
     return ok({
-      hits: [],
-      facets: {
-        category: {},
-        price_range: { min: 0, max: 0 },
-      },
-      total_hits: 0,
+      hits: (data ?? []).map((item: Record<string, unknown>) => {
+        const vendor = Array.isArray(item.vendor_accounts) ? item.vendor_accounts[0] : item.vendor_accounts;
+        const loc = Array.isArray(item.locations) ? item.locations[0] : item.locations;
+        const media = (item.media_assets as Array<{ url: string; is_primary: boolean }> | null) ?? [];
+        return {
+          item_id: item.id,
+          title: item.title,
+          category: item.category,
+          price_cents: item.base_price_cents,
+          vendor_name: vendor?.name,
+          location_name: loc?.name,
+          score: Number(item.quality_score),
+          media: media.filter((m) => m.is_primary).map((m) => m.url),
+        };
+      }),
+      facets: { category: catCounts, price_range: { min: 0, max: 0 } },
+      total_hits: count ?? 0,
       page,
       per_page,
       query_id: randomUUID(),
@@ -63,4 +99,3 @@ export async function GET(req: NextRequest) {
     return INTERNAL_ERROR();
   }
 }
-

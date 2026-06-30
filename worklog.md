@@ -253,3 +253,87 @@ Stage Summary:
 - DB operations that depend on Part VI schema return 501 SCHEMA_PENDING (honest — the contract is implemented, the DB layer is Part VI).
 - Auth endpoints (register, me) that work with the existing User model are fully functional.
 - Total artifacts: 23 route files + 6 lib files + 1 docs file + 6 reference repos = 36 new artifacts.
+
+---
+Task ID: MINE-1
+Agent: Explore (movinin reference miner)
+Task: Mine the movinin reference repo at `/home/z/my-project/references/movinin/` for its booking state machine, TTL sweep logic, `calculateTotalPrice`, 3-channel notification delivery, and availability/overlap check. Research-only — no code written.
+
+Findings (all quotes are verbatim from the repo):
+
+1. Booking FSM — 6 states, defined in `packages/movinin-types/index.ts:22-29`:
+   ```ts
+   export enum BookingStatus {
+     Void = 'VOID',
+     Pending = 'PENDING',
+     Deposit = 'DEPOSIT',
+     Paid = 'PAID',
+     Reserved = 'RESERVED',
+     Cancelled = 'CANCELLED',
+   }
+   ```
+   Model: `backend/src/models/Booking.ts` (status field enum at lines 39-50).
+   Observed transitions:
+   - checkout() → `Void` (pending Stripe/PayPal session) OR `Paid` (immediate PaymentIntent success).
+   - stripe.checkCheckoutSession / paypal.checkPayPalOrder → `Void` → `Paid` (clears `expireAt`); `Void` → delete on payment failure.
+   - admin/agency `update()` and `updateStatus()` → arbitrary status assignment (no enforced guard), with `notifyRenter` fired on status change.
+   - TTL sweep (Mongo background) → `Void` (with non-null `expireAt`) → deleted = inventory released.
+   - `Pending`, `Deposit`, `Reserved`, `Cancelled` are admin/agency-managed via update endpoints.
+
+2. TTL sweep — `backend/src/models/Booking.ts:76-83` defines a MongoDB TTL index on `expireAt`:
+   ```ts
+   expireAt: {
+     type: Date,
+     index: { name: BOOKING_EXPIRE_AT_INDEX_NAME, expireAfterSeconds: env.BOOKING_EXPIRE_AT, background: true },
+   }
+   ```
+   `BOOKING_EXPIRE_AT = STRIPE_SESSION_EXPIRE_AT + (10 * 60)` (`env.config.ts:383`); `STRIPE_SESSION_EXPIRE_AT` clamped to [1800, 82800] (default 82800 ≈ 23h).
+   `checkAndUpdateTTL` in `backend/src/utils/databaseHelper.ts:128-166` runs at startup to ensure the TTL index exists with the correct `expireAfterSeconds`, dropping/recreating if drifted.
+   On successful payment, `stripeController.checkCheckoutSession` and `paypalController.checkPayPalOrder` set `booking.expireAt = undefined`, removing it from TTL deletion → booking persists.
+
+3. `calculateTotalPrice` — `packages/movinin-helper/index.ts:322-345`:
+   ```ts
+   export const calculateTotalPrice = (property, from, to, options?) => {
+     const _days = days(from, to)
+     let _price = 0
+     if (property.rentalTerm === RentalTerm.Monthly)  _price = (property.price * _days) / daysInMonth(now.month, now.year)
+     else if (property.rentalTerm === RentalTerm.Weekly)  _price = (property.price * _days) / 7
+     else if (property.rentalTerm === RentalTerm.Daily)   _price = property.price * _days
+     else if (property.rentalTerm === RentalTerm.Yearly)  _price = (property.price * _days) / daysInYear(now.year)
+     if (options?.cancellation && property.cancellation > 0) _price += property.cancellation
+     return _price
+   }
+   ```
+   Multi-term proration: takes the property's listed price (per term) and linearly prorates by `_days` between `from` and `to`. Adds optional cancellation fee.
+
+4. 3-channel notification delivery — `backend/src/controllers/bookingController.ts`:
+   - `notify(renter, bookingId, user, notificationMessage)` (lines 54-91): in-app (Notification doc + NotificationCounter increment) + email (gated on `user.enableEmailNotifications` via nodemailer/SMTP) — used for agency/admin.
+   - `notifyRenter(booking)` (lines 313-413): in-app + email + push (Expo `expo-server-sdk` via `PushToken` lookup, batched via `chunkPushNotifications`). Triggered on every booking status change.
+   In-app Notification shape: `backend/src/models/Notification.ts` — `{ user, message, booking, isRead }`, indexed on `{ user, createdAt, _id }`.
+
+5. Availability / date-overlap check — `backend/src/controllers/propertyController.ts:838-1033` (`getFrontendProperties`).
+   MongoDB aggregation `$lookup` against `Booking` collection (lines 940-989) excludes any property whose `blockOnPay === true` AND has at least one booking with status ∈ {Paid, Reserved, Deposit} that overlaps the requested [from, to] range. Overlap expression:
+   ```js
+   $not: { $or: [ { $lt: ['$to', new Date(from)] }, { $gt: ['$from', new Date(to)] } ] }
+   ```
+   i.e. a booking overlaps iff NOT (booking.to < req.from OR booking.from > req.to).
+   Properties with `blockOnPay === false` (or unset) are listed regardless of overlap.
+
+File paths (single source of truth):
+- FSM states: `references/movinin/packages/movinin-types/index.ts:22-29`
+- Booking model + TTL index: `references/movinin/backend/src/models/Booking.ts`
+- TTL helper: `references/movinin/backend/src/utils/databaseTTLHelper.ts`
+- TTL index bootstrap: `references/movinin/backend/src/utils/databaseHelper.ts:128-166` (and `initialize()` at 250-254)
+- BOOKING_EXPIRE_AT config: `references/movinin/backend/src/config/env.config.ts:343-392`
+- calculateTotalPrice: `references/movinin/packages/movinin-helper/index.ts:314-345`
+- Notification 3-channel pattern: `references/movinin/backend/src/controllers/bookingController.ts:54-91` (notify) and `:313-413` (notifyRenter)
+- Availability overlap check: `references/movinin/backend/src/controllers/propertyController.ts:838-1033`
+- Stripe success → Paid: `references/movinin/backend/src/controllers/stripeController.ts:98-188`
+- PayPal success → Paid: `references/movinin/backend/src/controllers/paypalController.ts:45-135`
+
+Next actions for Planviry implementation:
+- Map movinin's 6 states to Planviry's spec (Draft/Pending/Paid/Confirmed/Cancelled/Expired) — Void↔Draft, Pending↔Pending, Deposit↔(n/a), Paid↔Paid, Reserved↔Confirmed, Cancelled↔Cancelled; Expired is movinin's implicit "TTL-deleted" outcome (need an explicit Expired state in Planviry).
+- Port the TTL pattern to Postgres/Supabase: replace Mongo TTL index with either (a) `pg_cron` job + `expires_at` column or (b) Supabase Edge Function `booking-ttl` scheduled via `pg_cron`/Supabase scheduler.
+- Port `calculateTotalPrice` into `@planviry/shared` (pure function, no DB).
+- Port the 3-channel pattern into the `notification-send` Edge Function + `notification-digest` worker, swapping Expo for FCM/APNS if needed.
+- Port the overlap check into the search SQL (Part VI inventory) — `WHERE EXISTS (SELECT 1 FROM booking WHERE property_id = $1 AND status IN (...) AND daterange(from, to) && daterange($2, $3))`.

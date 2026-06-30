@@ -1,11 +1,8 @@
 /**
- * apps/consumer-web/src/lib/db.ts
+ * apps/consumer-web/src/lib/db.ts — re-exports the canonical Supabase client.
  *
- * Re-exports the canonical PrismaClient singleton from @planviry/db so the
- * existing `import { db } from "@/lib/db"` contract keeps working after the
- * monorepo migration (Part II §2.1 — packages/db owns the schema + client).
- *
- * Part II  §2.2 — apps may import from packages/db.
+ * Part I §1.1.5 — Supabase is the SOLE database tier. No Prisma. No SQLite.
+ * Existing `import { db } from "@/lib/db"` now returns the Supabase client.
  */
-export { db, PrismaClient } from "@planviry/db";
-export type * from "@planviry/db";
+export { supabase as db, createUserClient, type SupabaseClient } from "@planviry/db";
+export { default } from "@planviry/db";

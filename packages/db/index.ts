@@ -1,63 +1,67 @@
 /**
- * @planviry/db
+ * @planviry/db — Supabase client (canonical database access for the entire monorepo).
  *
- * Canonical database client for the entire Planviry monorepo.
- * Every app, worker, and edge function that needs DB access imports
- * from here — never instantiates its own PrismaClient.
+ * Part I  §1.1.5 — Supabase (PostgreSQL 15+) is the SOLE database tier.
+ * Part I  §1.2.1 — Database layer: Supabase / PostgreSQL. No Prisma. No SQLite.
+ * Part II §2.2  — apps/workers/functions import from here, never instantiate their own client.
  *
- * Part II  §2.2 — Import Rules: packages/db may only import from packages/types.
- * Part I   §1.3 — Architecture Principle "State in Postgres": all canonical
- *                 state lives in the database; client state is derived.
- * Part VI  §6.x — Data Layer / Database Specification (schema lives in ./prisma).
- *
- * Usage:
- *   import { db } from "@planviry/db";
- *   const user = await db.user.findUnique({ where: { id } });
- *
- * NOTE on lazy initialization:
- *   The PrismaClient is constructed lazily (on first property access) via a
- *   Proxy. This means `import { db }` never triggers Prisma runtime
- *   initialization — important in bundled contexts (Next.js transpilePackages)
- *   where the generated client resolution happens at call time, not import
- *   time. The workspace package boundary resolves on import; the DB runtime
- *   activates on first query. Full Prisma runtime wiring is a Part VI task.
+ * The database is LIVE at https://gzbtmvzidmrnbcgyonlu.supabase.co with the full
+ * 43-table schema from Planviry_Full_Schema_TechnicalDoc_v1.0 already applied.
  */
 
-import { PrismaClient } from "@prisma/client";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const globalForPrisma = globalThis as unknown as {
-  __planviryPrisma?: PrismaClient;
-};
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://gzbtmvzidmrnbcgyonlu.supabase.co";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-function createClient(): PrismaClient {
-  return new PrismaClient({
-    log:
-      process.env.NODE_ENV === "production"
-        ? ["error", "warn"]
-        : ["query", "error", "warn"],
-  });
+if (!SERVICE_ROLE_KEY) {
+  throw new Error("SUPABASE_SERVICE_ROLE_KEY is required. Check apps/consumer-web/.env");
 }
 
 /**
- * Lazy PrismaClient singleton. Construction is deferred to the first property
- * access so that merely importing `@planviry/db` never fails — the workspace
- * boundary resolves cleanly, and the Prisma runtime only initializes when a
- * caller actually queries the database.
+ * Server-side Supabase client using the service_role key.
+ * Bypasses RLS — for use in API routes, workers, and edge functions ONLY.
+ * NEVER expose this client to the browser.
  */
-export const db = new Proxy({} as PrismaClient, {
-  get(_target, prop: string | symbol) {
-    if (!globalForPrisma.__planviryPrisma) {
-      globalForPrisma.__planviryPrisma = createClient();
-      if (process.env.NODE_ENV !== "production") {
-        // keep the singleton on globalThis across HMR / fast-refresh
-      }
-    }
-    const value = Reflect.get(globalForPrisma.__planviryPrisma, prop);
-    return typeof value === "function" ? value.bind(globalForPrisma.__planviryPrisma) : value;
+export const supabase: SupabaseClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+  db: {
+    schema: "public",
+  },
+  global: {
+    headers: {
+      "x-application-name": "planviry-api",
+    },
   },
 });
 
-export { PrismaClient } from "@prisma/client";
-export type * from "@prisma/client";
+/**
+ * Create a user-scoped Supabase client that respects RLS by forwarding the
+ * caller's JWT. Use this for endpoints where RLS must enforce row-level isolation
+ * (Part I §1.3 "RLS as Last Defense").
+ */
+export function createUserClient(userJwt: string): SupabaseClient {
+  return createClient(SUPABASE_URL, userJwt, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    db: { schema: "public" },
+  });
+}
 
-export default db;
+export { createClient };
+export type { SupabaseClient };
+export type Database = {
+  public: {
+    Tables: {
+      [table: string]: {
+        Row: Record<string, unknown>;
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+      };
+    };
+  };
+};
+
+export default supabase;

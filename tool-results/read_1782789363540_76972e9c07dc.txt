@@ -1,0 +1,978 @@
+     1→import mongoose from 'mongoose'
+     2→import escapeStringRegexp from 'escape-string-regexp'
+     3→import { Expo, ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk'
+     4→import { Request, Response } from 'express'
+     5→import nodemailer from 'nodemailer'
+     6→import * as movininTypes from ':movinin-types'
+     7→import i18n from '../lang/i18n'
+     8→import Booking from '../models/Booking'
+     9→import User from '../models/User'
+    10→import Token from '../models/Token'
+    11→import Property from '../models/Property'
+    12→import Notification from '../models/Notification'
+    13→import NotificationCounter from '../models/NotificationCounter'
+    14→import PushToken from '../models/PushToken'
+    15→import Location from '../models/Location'
+    16→import * as env from '../config/env.config'
+    17→import * as mailHelper from '../utils/mailHelper'
+    18→import * as helper from '../utils/helper'
+    19→import * as logger from '../utils/logger'
+    20→import stripeAPI from '../payment/stripe'
+    21→
+    22→/**
+    23→ * Create a Booking.
+    24→ *
+    25→ * @export
+    26→ * @async
+    27→ * @param {Request} req
+    28→ * @param {Response} res
+    29→ * @returns {unknown}
+    30→ */
+    31→export const create = async (req: Request, res: Response) => {
+    32→  try {
+    33→    const { body }: { body: movininTypes.Booking } = req
+    34→    const booking = new Booking(body)
+    35→
+    36→    await booking.save()
+    37→    res.json(booking)
+    38→  } catch (err) {
+    39→    logger.error(`[booking.create] ${i18n.t('ERROR')} ${JSON.stringify(req.body)}`, err)
+    40→    res.status(400).send(i18n.t('ERROR') + err)
+    41→  }
+    42→}
+    43→
+    44→/**
+    45→ * Notify a agency or admin.
+    46→ *
+    47→ * @async
+    48→ * @param {env.User} renter
+    49→ * @param {string} bookingId
+    50→ * @param {env.User} user
+    51→ * @param {boolean} notificationMessage
+    52→ * @returns {void}
+    53→ */
+    54→export const notify = async (renter: env.User, bookingId: string, user: env.User, notificationMessage: string) => {
+    55→  i18n.locale = user.language
+    56→
+    57→  // notification
+    58→  const message = `${renter.fullName} ${notificationMessage} ${bookingId}.`
+    59→  const notification = new Notification({
+    60→    user: user._id,
+    61→    message,
+    62→    booking: bookingId,
+    63→  })
+    64→
+    65→  await notification.save()
+    66→  let counter = await NotificationCounter.findOne({ user: user._id })
+    67→  if (counter && typeof counter.count !== 'undefined') {
+    68→    counter.count += 1
+    69→    await counter.save()
+    70→  } else {
+    71→    counter = new NotificationCounter({ user: user._id, count: 1 })
+    72→    await counter.save()
+    73→  }
+    74→
+    75→  // mail
+    76→  if (user.enableEmailNotifications) {
+    77→    const mailOptions: nodemailer.SendMailOptions = {
+    78→      from: env.SMTP_FROM,
+    79→      to: user.email,
+    80→      subject: message,
+    81→      html: `<p>
+    82→    ${i18n.t('HELLO')}${user.fullName},<br><br>
+    83→    ${message}<br><br>
+    84→    ${helper.joinURL(env.ADMIN_HOST, `update-booking?b=${bookingId}`)}<br><br>
+    85→    ${i18n.t('REGARDS')}<br>
+    86→    </p>`,
+    87→    }
+    88→
+    89→    await mailHelper.sendMail(mailOptions)
+    90→  }
+    91→}
+    92→
+    93→/**
+    94→ * Send checkout confirmation email to renter.
+    95→ *
+    96→ * @async
+    97→ * @param {env.User} user
+    98→ * @param {env.Booking} booking
+    99→ * @param {boolean} payLater
+   100→ * @returns {unknown}
+   101→ */
+   102→export const confirm = async (user: env.User, booking: env.Booking, payLater: boolean) => {
+   103→  const { language } = user
+   104→  const locale = language === 'fr' ? 'fr-FR' : 'en-US'
+   105→  const options: Intl.DateTimeFormatOptions = {
+   106→    weekday: 'long',
+   107→    month: 'long',
+   108→    year: 'numeric',
+   109→    day: 'numeric',
+   110→    hour: 'numeric',
+   111→    minute: 'numeric',
+   112→    timeZone: env.TIMEZONE,
+   113→  }
+   114→  const from = booking.from.toLocaleString(locale, options)
+   115→  const to = booking.to.toLocaleString(locale, options)
+   116→  const property = await Property.findById(booking.property).populate<{ agency: env.User }>('agency')
+   117→
+   118→  if (!property) {
+   119→    logger.info(`Property ${booking.property} not found`)
+   120→    return false
+   121→  }
+   122→
+   123→  const location = await Location.findById(booking.location).populate<{ values: env.LocationValue[] }>('values')
+   124→  if (!location) {
+   125→    logger.info(`Location ${booking.location} not found`)
+   126→    return false
+   127→  }
+   128→
+   129→  const mailOptions: nodemailer.SendMailOptions = {
+   130→    from: env.SMTP_FROM,
+   131→    to: user.email,
+   132→    subject: `${i18n.t('BOOKING_CONFIRMED_SUBJECT_PART1')} ${booking._id} ${i18n.t('BOOKING_CONFIRMED_SUBJECT_PART2')}`,
+   133→    html:
+   134→      `<p>${i18n.t('HELLO')}${user.fullName},<br><br>
+   135→        ${!payLater ? `${i18n.t('BOOKING_CONFIRMED_PART1')} ${booking._id} ${i18n.t('BOOKING_CONFIRMED_PART2')}`
+   136→        + '<br><br>' : ''}
+   137→        ${i18n.t('BOOKING_CONFIRMED_PART3')}${property.agency.fullName}${i18n.t('BOOKING_CONFIRMED_PART4')}${i18n.t('BOOKING_CONFIRMED_PART5')}`
+   138→      + `${from} ${i18n.t('BOOKING_CONFIRMED_PART6')}`
+   139→      + `${property.name}${i18n.t('BOOKING_CONFIRMED_PART7')}`
+   140→      + `${((property.address && (`<br><br>${i18n.t('BOOKING_CONFIRMED_ADDRESS')}${property.address}`)) || '')}`
+   141→      + `${((property.latitude && property.longitude && (`<br><br>${i18n.t('BOOKING_CONFIRMED_MAP_PART1')}<a href='https://maps.google.com/?q=${property.latitude},${property.longitude}'>${i18n.t('BOOKING_CONFIRMED_MAP_PART2')}</a>`)) || '')}`
+   142→      + `<br><br>${i18n.t('BOOKING_CONFIRMED_PART8')}<br><br>`
+   143→      + `${i18n.t('BOOKING_CONFIRMED_PART9')}${property.agency.fullName}${i18n.t('BOOKING_CONFIRMED_PART10')}${i18n.t('BOOKING_CONFIRMED_PART11')}`
+   144→      + `${to} ${i18n.t('BOOKING_CONFIRMED_PART12')}`
+   145→      + `<br><br>${i18n.t('BOOKING_CONFIRMED_PART13')}<br><br>${i18n.t('BOOKING_CONFIRMED_PART14')}${env.FRONTEND_HOST}<br><br>
+   146→        ${i18n.t('REGARDS')}<br></p>`,
+   147→  }
+   148→  await mailHelper.sendMail(mailOptions)
+   149→
+   150→  return true
+   151→}
+   152→
+   153→/**
+   154→ * Complete checkout process and create Booking.
+   155→ *
+   156→ * @export
+   157→ * @async
+   158→ * @param {Request} req
+   159→ * @param {Response} res
+   160→ * @returns {unknown}
+   161→ */
+   162→export const checkout = async (req: Request, res: Response) => {
+   163→  try {
+   164→    let user: env.User | null
+   165→    const { body }: { body: movininTypes.CheckoutPayload } = req
+   166→    const { renter } = body
+   167→
+   168→    if (!body.booking) {
+   169→      throw new Error('Booking missing')
+   170→    }
+   171→
+   172→    if (renter) {
+   173→      renter.verified = false
+   174→      renter.blacklisted = false
+   175→
+   176→      user = new User(renter)
+   177→      await user.save()
+   178→
+   179→      const token = new Token({ user: user._id, token: helper.generateToken() })
+   180→      await token.save()
+   181→
+   182→      i18n.locale = user.language
+   183→
+   184→      const mailOptions: nodemailer.SendMailOptions = {
+   185→        from: env.SMTP_FROM,
+   186→        to: user.email,
+   187→        subject: i18n.t('ACCOUNT_ACTIVATION_SUBJECT'),
+   188→        html: `<p>${i18n.t('HELLO')}${user.fullName},<br><br>
+   189→        ${i18n.t('ACCOUNT_ACTIVATION_LINK')}<br><br>
+   190→        ${helper.joinURL(env.FRONTEND_HOST, 'activate')}/?u=${encodeURIComponent(user._id.toString())}&e=${encodeURIComponent(user.email)}&t=${encodeURIComponent(token.token)}<br><br>
+   191→        ${i18n.t('REGARDS')}<br></p>`,
+   192→      }
+   193→      await mailHelper.sendMail(mailOptions)
+   194→
+   195→      body.booking.renter = user._id.toString()
+   196→    } else {
+   197→      user = await User.findById(body.booking.renter)
+   198→    }
+   199→
+   200→    if (!user) {
+   201→      logger.info('Renter not found', body)
+   202→      res.sendStatus(204)
+   203→      return
+   204→    }
+   205→
+   206→    if (!body.payLater) {
+   207→      const { payPal, paymentIntentId, sessionId } = body
+   208→
+   209→      if (!payPal && !paymentIntentId && !sessionId) {
+   210→        throw new Error('paymentIntentId and sessionId not found')
+   211→      }
+   212→
+   213→      if (!payPal) {
+   214→        body.booking.customerId = body.customerId
+   215→      }
+   216→
+   217→      if (paymentIntentId) {
+   218→        const paymentIntent = await stripeAPI.paymentIntents.retrieve(paymentIntentId)
+   219→        if (paymentIntent.status !== 'succeeded') {
+   220→          const message = `Payment failed: ${paymentIntent.status}`
+   221→          logger.error(message, body)
+   222→          res.status(400).send(message)
+   223→          return
+   224→        }
+   225→
+   226→        body.booking.paymentIntentId = paymentIntentId
+   227→        body.booking.status = movininTypes.BookingStatus.Paid
+   228→      } else {
+   229→        //
+   230→        // Bookings created from checkout with Stripe are temporary
+   231→        // and are automatically deleted if the payment checkout session expires.
+   232→        //
+   233→        let expireAt = new Date()
+   234→        expireAt.setSeconds(expireAt.getSeconds() + env.BOOKING_EXPIRE_AT)
+   235→
+   236→        body.booking.sessionId = !payPal ? body.sessionId : undefined
+   237→        body.booking.status = movininTypes.BookingStatus.Void
+   238→        body.booking.expireAt = expireAt
+   239→
+   240→        //
+   241→        // Non verified and active users created from checkout with Stripe are temporary
+   242→        // and are automatically deleted if the payment checkout session expires.
+   243→        //
+   244→        if (!user.verified) {
+   245→          expireAt = new Date()
+   246→          expireAt.setSeconds(expireAt.getSeconds() + env.USER_EXPIRE_AT)
+   247→
+   248→          user.expireAt = expireAt
+   249→          await user.save()
+   250→        }
+   251→      }
+   252→    }
+   253→
+   254→    const { customerId } = body
+   255→    if (customerId) {
+   256→      user.customerId = customerId
+   257→      await user?.save()
+   258→    }
+   259→
+   260→    const { language } = user
+   261→    i18n.locale = language
+   262→
+   263→    const booking = new Booking(body.booking)
+   264→
+   265→    await booking.save()
+   266→
+   267→    if (body.payLater || (booking.status === movininTypes.BookingStatus.Paid && body.paymentIntentId && body.customerId)) {
+   268→      // Mark property as unavailable
+   269→      // if (env.MARK_PROPERTY_AS_UNAVAILABLE_ON_CHECKOUT) {
+   270→      //   await Property.updateOne({ _id: booking.property }, { available: false })
+   271→      // }
+   272→
+   273→      // Send confirmation email
+   274→      if (!(await confirm(user, booking, body.payLater!))) {
+   275→        res.sendStatus(400)
+   276→        return
+   277→      }
+   278→
+   279→      // Notify agency
+   280→      const agency = await User.findById(booking.agency)
+   281→      if (!agency) {
+   282→        logger.info(`Agency ${booking.agency} not found`)
+   283→        res.sendStatus(204)
+   284→        return
+   285→      }
+   286→      i18n.locale = agency.language
+   287→      let message = body.payLater ? i18n.t('BOOKING_PAY_LATER_NOTIFICATION') : i18n.t('BOOKING_PAID_NOTIFICATION')
+   288→      await notify(user, booking._id.toString(), agency, message)
+   289→
+   290→      // Notify admin
+   291→      const admin = !!env.ADMIN_EMAIL && (await User.findOne({ email: env.ADMIN_EMAIL, type: movininTypes.UserType.Admin }))
+   292→      if (admin) {
+   293→        i18n.locale = admin.language
+   294→        message = body.payLater ? i18n.t('BOOKING_PAY_LATER_NOTIFICATION') : i18n.t('BOOKING_PAID_NOTIFICATION')
+   295→        await notify(user, booking._id.toString(), admin, message)
+   296→      }
+   297→    }
+   298→
+   299→    res.status(200).send({ bookingId: booking._id })
+   300→  } catch (err) {
+   301→    logger.error(`[booking.checkout] ${i18n.t('ERROR')}`, err)
+   302→    res.status(400).send(i18n.t('ERROR') + err)
+   303→  }
+   304→}
+   305→
+   306→/**
+   307→ * Notify customer and send push notification.
+   308→ *
+   309→ * @async
+   310→ * @param {env.Booking} booking
+   311→ * @returns {*}
+   312→ */
+   313→const notifyRenter = async (booking: env.Booking) => {
+   314→  const renter = await User.findById(booking.renter)
+   315→
+   316→  if (!renter) {
+   317→    logger.info(`Renter ${booking.renter} not found`)
+   318→    return
+   319→  }
+   320→
+   321→  i18n.locale = renter.language
+   322→
+   323→  const message = `${i18n.t('BOOKING_UPDATED_NOTIFICATION_PART1')} ${booking._id} ${i18n.t('BOOKING_UPDATED_NOTIFICATION_PART2')}`
+   324→  const notification = new Notification({
+   325→    user: renter._id,
+   326→    message,
+   327→    booking: booking._id,
+   328→  })
+   329→  await notification.save()
+   330→
+   331→  let counter = await NotificationCounter.findOne({ user: renter._id })
+   332→  if (counter && typeof counter.count !== 'undefined') {
+   333→    counter.count += 1
+   334→    await counter.save()
+   335→  } else {
+   336→    counter = new NotificationCounter({ user: renter._id, count: 1 })
+   337→    await counter.save()
+   338→  }
+   339→
+   340→  // mail
+   341→  if (renter.enableEmailNotifications) {
+   342→    const mailOptions: nodemailer.SendMailOptions = {
+   343→      from: env.SMTP_FROM,
+   344→      to: renter.email,
+   345→      subject: message,
+   346→      html: `<p>${i18n.t('HELLO')}${renter.fullName},<br><br>
+   347→    ${message}<br><br>
+   348→    ${helper.joinURL(env.FRONTEND_HOST, `booking?b=${booking._id}`)}<br><br>
+   349→    ${i18n.t('REGARDS')}<br></p>`,
+   350→    }
+   351→    await mailHelper.sendMail(mailOptions)
+   352→  }
+   353→
+   354→  // push notification
+   355→  const pushToken = await PushToken.findOne({ user: renter._id })
+   356→  if (pushToken) {
+   357→    const { token } = pushToken
+   358→    const expo = new Expo({ accessToken: env.EXPO_ACCESS_TOKEN })
+   359→
+   360→    if (!Expo.isExpoPushToken(token)) {
+   361→      logger.info(`Push token ${token} is not a valid Expo push token.`)
+   362→      return
+   363→    }
+   364→
+   365→    const messages: ExpoPushMessage[] = [
+   366→      {
+   367→        to: token,
+   368→        sound: 'default',
+   369→        body: message,
+   370→        data: {
+   371→          user: renter._id,
+   372→          notification: notification._id,
+   373→          booking: booking._id,
+   374→        },
+   375→      },
+   376→    ]
+   377→
+   378→    // The Expo push notification service accepts batches of notifications so
+   379→    // that you don't need to send 1000 requests to send 1000 notifications. We
+   380→    // recommend you batch your notifications to reduce the number of requests
+   381→    // and to compress them (notifications with similar content will get
+   382→    // compressed).
+   383→    const chunks = expo.chunkPushNotifications(messages)
+   384→    const tickets: ExpoPushTicket[] = [];
+   385→
+   386→    (async () => {
+   387→      // Send the chunks to the Expo push notification service. There are
+   388→      // different strategies you could use. A simple one is to send one chunk at a
+   389→      // time, which nicely spreads the load out over time:
+   390→      for (const chunk of chunks) {
+   391→        try {
+   392→          const ticketChunks = await expo.sendPushNotificationsAsync(chunk)
+   393→
+   394→          tickets.push(...ticketChunks)
+   395→
+   396→          // NOTE: If a ticket contains an error code in ticket.details.error, you
+   397→          // must handle it appropriately. The error codes are listed in the Expo
+   398→          // documentation:
+   399→          // https://docs.expo.io/push-notifications/sending-notifications/#individual-errors
+   400→          for (const ticketChunk of ticketChunks) {
+   401→            if (ticketChunk.status === 'ok') {
+   402→              logger.info(`Push notification sent: ${ticketChunk.id}`)
+   403→            } else {
+   404→              throw new Error(ticketChunk.message)
+   405→            }
+   406→          }
+   407→        } catch (error) {
+   408→          logger.error('Error while sending push notification', error)
+   409→        }
+   410→      }
+   411→    })()
+   412→  }
+   413→}
+   414→
+   415→/**
+   416→ * Update Booking.
+   417→ *
+   418→ * @export
+   419→ * @async
+   420→ * @param {Request} req
+   421→ * @param {Response} res
+   422→ * @returns {unknown}
+   423→ */
+   424→export const update = async (req: Request, res: Response) => {
+   425→  try {
+   426→    const { body }: { body: movininTypes.Booking } = req
+   427→    if (!body._id) {
+   428→      throw new Error('body._id not found')
+   429→    }
+   430→
+   431→    const booking = await Booking.findById(body._id)
+   432→
+   433→    if (booking) {
+   434→      // begin of security check
+   435→      const sessionUserId = req.user?._id
+   436→      const sessionUser = await User.findById(sessionUserId)
+   437→      if (!sessionUser || sessionUser.type === movininTypes.UserType.User || (sessionUser.type === movininTypes.UserType.Agency && sessionUserId !== booking.agency?.toString())) {
+   438→        logger.error(`[booking.update] Unauthorized attempt to update booking ${booking._id.toString()} by user ${sessionUserId}`)
+   439→        res.status(403).send('Forbidden: You cannot update booking information')
+   440→        return
+   441→      }
+   442→      // end of security check
+   443→
+   444→      const {
+   445→        agency,
+   446→        location,
+   447→        property,
+   448→        renter,
+   449→        from,
+   450→        to,
+   451→        status,
+   452→        cancellation,
+   453→        price,
+   454→      } = body
+   455→
+   456→      const previousStatus = booking.status
+   457→
+   458→      booking.agency = new mongoose.Types.ObjectId(agency as string)
+   459→      booking.location = new mongoose.Types.ObjectId(location as string)
+   460→      booking.property = new mongoose.Types.ObjectId(property as string)
+   461→      booking.renter = new mongoose.Types.ObjectId(renter as string)
+   462→      booking.from = from
+   463→      booking.to = to
+   464→      booking.status = status
+   465→      booking.cancellation = cancellation
+   466→      booking.price = price as number
+   467→
+   468→      await booking.save()
+   469→
+   470→      if (previousStatus !== status) {
+   471→        // notify renter
+   472→        await notifyRenter(booking)
+   473→      }
+   474→
+   475→      res.json(booking)
+   476→      return
+   477→    }
+   478→
+   479→    logger.error('[booking.update] Booking not found:', body._id)
+   480→    res.sendStatus(204)
+   481→  } catch (err) {
+   482→    logger.error(`[booking.update] ${i18n.t('ERROR')} ${JSON.stringify(req.body)}`, err)
+   483→    res.status(400).send(i18n.t('ERROR') + err)
+   484→  }
+   485→}
+   486→
+   487→/**
+   488→ * Update Booking Status.
+   489→ *
+   490→ * @export
+   491→ * @async
+   492→ * @param {Request} req
+   493→ * @param {Response} res
+   494→ * @returns {unknown}
+   495→ */
+   496→export const updateStatus = async (req: Request, res: Response) => {
+   497→  try {
+   498→    const { body }: { body: movininTypes.UpdateStatusPayload } = req
+   499→    const { ids: _ids, status } = body
+   500→    const ids = _ids.map((id) => new mongoose.Types.ObjectId(id))
+   501→    const bulk = Booking.collection.initializeOrderedBulkOp()
+   502→    const bookings = await Booking.find({ _id: { $in: ids } })
+   503→
+   504→    bulk.find({ _id: { $in: ids } }).update({ $set: { status } })
+   505→    await bulk.execute()
+   506→
+   507→    for (const booking of bookings) {
+   508→      if (booking.status !== status) {
+   509→        await notifyRenter(booking)
+   510→      }
+   511→    }
+   512→
+   513→    res.sendStatus(200)
+   514→  } catch (err) {
+   515→    logger.error(`[booking.updateStatus] ${i18n.t('ERROR')} ${JSON.stringify(req.body)}`, err)
+   516→    res.status(400).send(i18n.t('ERROR') + err)
+   517→  }
+   518→}
+   519→
+   520→/**
+   521→ * Delete Bookings.
+   522→ *
+   523→ * @export
+   524→ * @async
+   525→ * @param {Request} req
+   526→ * @param {Response} res
+   527→ * @returns {unknown}
+   528→ */
+   529→export const deleteBookings = async (req: Request, res: Response) => {
+   530→  try {
+   531→    const { body }: { body: string[] } = req
+   532→    const ids = body.map((id) => new mongoose.Types.ObjectId(id))
+   533→
+   534→    const sessionUserId = req.user?._id
+   535→    const sessionUser = await User.findById(sessionUserId)
+   536→
+   537→    let unauthorizedAttemptLogged = false
+   538→    for (const id of ids) {
+   539→      const booking = await Booking.findById(id)
+   540→
+   541→      if (booking) {
+   542→        // begin of security check
+   543→        if (!sessionUser || sessionUser.type === movininTypes.UserType.User || (sessionUser.type === movininTypes.UserType.Agency && sessionUserId !== booking.agency?.toString())) {
+   544→          logger.error(`[booking.deleteBookings] Unauthorized attempt to delete booking ${booking._id.toString()} by user ${sessionUserId}`)
+   545→          unauthorizedAttemptLogged = true
+   546→          continue
+   547→        }
+   548→        // end of security check
+   549→        await booking.deleteOne()
+   550→      }
+   551→    }
+   552→
+   553→    if (unauthorizedAttemptLogged) {
+   554→      res.status(403).send('Forbidden: You cannot delete some of the bookings')
+   555→      return
+   556→    }
+   557→
+   558→    res.sendStatus(200)
+   559→  } catch (err) {
+   560→    logger.error(`[booking.deleteBookings] ${i18n.t('ERROR')} ${JSON.stringify(req.body)}`, err)
+   561→    res.status(400).send(i18n.t('ERROR') + err)
+   562→  }
+   563→}
+   564→
+   565→/**
+   566→ * Delete temporary Booking created from checkout session.
+   567→ *
+   568→ * @async
+   569→ * @param {Request} req
+   570→ * @param {Response} res
+   571→ * @returns {unknown}
+   572→ */
+   573→export const deleteTempBooking = async (req: Request, res: Response) => {
+   574→  const { bookingId, sessionId } = req.params
+   575→
+   576→  try {
+   577→    const booking = await Booking.findOne({ _id: bookingId, sessionId, status: movininTypes.BookingStatus.Void, expireAt: { $ne: null } })
+   578→    if (booking) {
+   579→      const user = await User.findOne({ _id: booking.renter, verified: false, expireAt: { $ne: null } })
+   580→      await user?.deleteOne()
+   581→    }
+   582→    await booking?.deleteOne()
+   583→    res.sendStatus(200)
+   584→  } catch (err) {
+   585→    logger.error(`[booking.deleteTempBooking] ${i18n.t('ERROR')} ${JSON.stringify({ bookingId, sessionId })}`, err)
+   586→    res.status(400).send(i18n.t('ERROR') + err)
+   587→  }
+   588→}
+   589→
+   590→/**
+   591→ * Get Booking by ID.
+   592→ *
+   593→ * @export
+   594→ * @async
+   595→ * @param {Request} req
+   596→ * @param {Response} res
+   597→ * @returns {unknown}
+   598→ */
+   599→export const getBooking = async (req: Request, res: Response) => {
+   600→  const { id } = req.params
+   601→
+   602→  try {
+   603→    const booking = await Booking.findById(id)
+   604→      .populate<{ agency: env.UserInfo }>('agency')
+   605→      .populate<{ location: env.LocationInfo }>({
+   606→        path: 'location',
+   607→        populate: {
+   608→          path: 'values',
+   609→          model: 'LocationValue',
+   610→        },
+   611→      })
+   612→      .populate<{ property: env.PropertyInfo }>({
+   613→        path: 'property',
+   614→        populate: {
+   615→          path: 'agency',
+   616→          model: 'User',
+   617→        },
+   618→      })
+   619→      .populate<{ renter: env.User }>('renter')
+   620→      .lean()
+   621→
+   622→    if (booking) {
+   623→      const { language } = req.params
+   624→
+   625→      booking.agency = {
+   626→        _id: booking.agency._id,
+   627→        fullName: booking.agency.fullName,
+   628→        avatar: booking.agency.avatar,
+   629→        payLater: booking.agency.payLater,
+   630→      }
+   631→
+   632→      booking.property.agency = {
+   633→        _id: booking.property.agency._id,
+   634→        fullName: booking.property.agency.fullName,
+   635→        avatar: booking.property.agency.avatar,
+   636→        payLater: booking.property.agency.payLater,
+   637→      }
+   638→
+   639→      booking.location.name = booking.location.values.filter((value) => value.language === language)[0].value
+   640→      res.json(booking)
+   641→      return
+   642→    }
+   643→
+   644→    logger.error('[booking.getBooking] Booking not found:', id)
+   645→    res.sendStatus(204)
+   646→  } catch (err) {
+   647→    logger.error(`[booking.getBooking] ${i18n.t('ERROR')} ${id}`, err)
+   648→    res.status(400).send(i18n.t('ERROR') + err)
+   649→  }
+   650→}
+   651→
+   652→/**
+   653→ * Get Booking by sessionId.
+   654→ *
+   655→ * @export
+   656→ * @async
+   657→ * @param {Request} req
+   658→ * @param {Response} res
+   659→ * @returns {unknown}
+   660→ */
+   661→export const getBookingId = async (req: Request, res: Response) => {
+   662→  const { sessionId } = req.params
+   663→
+   664→  try {
+   665→    const booking = await Booking.findOne({ sessionId })
+   666→
+   667→    if (!booking) {
+   668→      logger.error('[booking.getBookingId] Booking not found (sessionId):', sessionId)
+   669→      res.sendStatus(204)
+   670→      return
+   671→    }
+   672→    res.json(booking?._id.toString())
+   673→  } catch (err) {
+   674→    logger.error(`[booking.getBookingId] (sessionId) ${i18n.t('ERROR')} ${sessionId}`, err)
+   675→    res.status(400).send(i18n.t('ERROR') + err)
+   676→  }
+   677→}
+   678→
+   679→/**
+   680→ * Get Bookings.
+   681→ *
+   682→ * @export
+   683→ * @async
+   684→ * @param {Request} req
+   685→ * @param {Response} res
+   686→ * @returns {unknown}
+   687→ */
+   688→export const getBookings = async (req: Request, res: Response) => {
+   689→  try {
+   690→    const { body }: { body: movininTypes.GetBookingsPayload } = req
+   691→    const page = Number.parseInt(req.params.page, 10)
+   692→    const size = Number.parseInt(req.params.size, 10)
+   693→    let agencies = body.agencies.map((id: string) => new mongoose.Types.ObjectId(id))
+   694→    const {
+   695→      statuses,
+   696→      // user,
+   697→      property,
+   698→    } = body
+   699→    const location = (body.filter && body.filter.location) || null
+   700→    const from = (body.filter && body.filter.from && new Date(body.filter.from)) || null
+   701→    const dateBetween = (body.filter && body.filter.dateBetween && new Date(body.filter.dateBetween)) || null
+   702→    const to = (body.filter && body.filter.to && new Date(body.filter.to)) || null
+   703→    let keyword = (body.filter && body.filter.keyword) || ''
+   704→    const options = 'i'
+   705→
+   706→    const $match: mongoose.QueryFilter<any> = {
+   707→      $and: [{ 'agency._id': { $in: agencies } }, { status: { $in: statuses } }, { expireAt: null }],
+   708→    }
+   709→
+   710→    // begin of security check
+   711→    const sessionUserId = req.user?._id
+   712→    const sessionUser = await User.findById(sessionUserId)
+   713→    if (!sessionUser) {
+   714→      logger.error(`[booking.getBookings] Unauthorized attempt to get bookings by user ${sessionUserId}`)
+   715→      res.status(403).send('Forbidden: You cannot get booking information')
+   716→      return
+   717→    }
+   718→    if (sessionUser.type === movininTypes.UserType.Agency) {
+   719→      agencies = [new mongoose.Types.ObjectId(sessionUserId)]
+   720→    }
+   721→        if (sessionUser.type === movininTypes.UserType.User) {
+   722→      $match.$and!.push({ 'renter._id': { $eq: new mongoose.Types.ObjectId(sessionUser._id) } })
+   723→    }
+   724→    // end of security check
+   725→
+   726→    // if (user) {
+   727→    //   $match.$and!.push({
+   728→    //     'renter._id': { $eq: new mongoose.Types.ObjectId(user) },
+   729→    //   })
+   730→    // }
+   731→    if (property) {
+   732→      $match.$and!.push({
+   733→        'property._id': { $eq: new mongoose.Types.ObjectId(property) },
+   734→      })
+   735→    }
+   736→    if (location) {
+   737→      $match.$and!.push({ 'location._id': { $eq: new mongoose.Types.ObjectId(location) } })
+   738→    }
+   739→    if (from) {
+   740→      $match.$and!.push({ from: { $gte: from } })
+   741→    } // $from >= from
+   742→
+   743→    if (dateBetween) {
+   744→      const dateBetweenStart = new Date(dateBetween)
+   745→      dateBetweenStart.setHours(0, 0, 0, 0)
+   746→      const dateBetweenEnd = new Date(dateBetween)
+   747→      dateBetweenEnd.setHours(23, 59, 59, 999)
+   748→
+   749→      $match.$and!.push({
+   750→        $and: [
+   751→          { from: { $lte: dateBetweenEnd } },
+   752→          { to: { $gte: dateBetweenStart } },
+   753→        ],
+   754→      })
+   755→    } else if (from) {
+   756→      $match.$and!.push({ from: { $gte: from } }) // $from >= from
+   757→    }
+   758→
+   759→    if (to) {
+   760→      $match.$and!.push({ to: { $lte: to } })
+   761→    } // $to <= to
+   762→
+   763→    if (keyword) {
+   764→      const isObjectId = helper.isValidObjectId(keyword)
+   765→      if (isObjectId) {
+   766→        $match.$and!.push({
+   767→          _id: { $eq: new mongoose.Types.ObjectId(keyword) },
+   768→        })
+   769→      } else {
+   770→        keyword = escapeStringRegexp(keyword)
+   771→        $match.$and!.push({
+   772→          $or: [
+   773→            { 'agency.fullName': { $regex: keyword, $options: options } },
+   774→            { 'renter.fullName': { $regex: keyword, $options: options } },
+   775→            { 'property.name': { $regex: keyword, $options: options } },
+   776→            { 'location.name': { $regex: keyword, $options: options } },
+   777→          ],
+   778→        })
+   779→      }
+   780→    }
+   781→
+   782→    const { language } = req.params
+   783→
+   784→    const data = await Booking.aggregate([
+   785→      {
+   786→        $lookup: {
+   787→          from: 'User',
+   788→          let: { agencyId: '$agency' },
+   789→          pipeline: [
+   790→            {
+   791→              $match: {
+   792→                $expr: { $eq: ['$_id', '$$agencyId'] },
+   793→              },
+   794→            },
+   795→          ],
+   796→          as: 'agency',
+   797→        },
+   798→      },
+   799→      { $unwind: { path: '$agency', preserveNullAndEmptyArrays: false } },
+   800→      {
+   801→        $lookup: {
+   802→          from: 'Location',
+   803→          let: { locationId: '$location' },
+   804→          pipeline: [
+   805→            {
+   806→              $match: {
+   807→                $expr: { $eq: ['$_id', '$$locationId'] },
+   808→              },
+   809→            },
+   810→            {
+   811→              $lookup: {
+   812→                from: 'LocationValue',
+   813→                let: { values: '$values' },
+   814→                pipeline: [
+   815→                  {
+   816→                    $match: {
+   817→                      $and: [
+   818→                        { $expr: { $in: ['$_id', '$$values'] } },
+   819→                        { $expr: { $eq: ['$language', language] } },
+   820→                      ],
+   821→                    },
+   822→                  },
+   823→                ],
+   824→                as: 'value',
+   825→              },
+   826→            },
+   827→            { $unwind: { path: '$value', preserveNullAndEmptyArrays: false } },
+   828→            {
+   829→              $addFields: { name: '$value.value' },
+   830→            },
+   831→          ],
+   832→          as: 'location',
+   833→        },
+   834→      },
+   835→      { $unwind: { path: '$location', preserveNullAndEmptyArrays: false } },
+   836→      {
+   837→        $lookup: {
+   838→          from: 'Property',
+   839→          let: { propertyId: '$property' },
+   840→          pipeline: [
+   841→            {
+   842→              $match: {
+   843→                $expr: { $eq: ['$_id', '$$propertyId'] },
+   844→              },
+   845→            },
+   846→          ],
+   847→          as: 'property',
+   848→        },
+   849→      },
+   850→      { $unwind: { path: '$property', preserveNullAndEmptyArrays: false } },
+   851→      {
+   852→        $lookup: {
+   853→          from: 'User',
+   854→          let: { renterId: '$renter' },
+   855→          pipeline: [
+   856→            {
+   857→              $match: {
+   858→                $expr: { $eq: ['$_id', '$$renterId'] },
+   859→              },
+   860→            },
+   861→          ],
+   862→          as: 'renter',
+   863→        },
+   864→      },
+   865→      { $unwind: { path: '$renter', preserveNullAndEmptyArrays: false } },
+   866→      {
+   867→        $match,
+   868→      },
+   869→      {
+   870→        $facet: {
+   871→          resultData: [{ $sort: { createdAt: -1, _id: 1 } }, { $skip: (page - 1) * size }, { $limit: size }],
+   872→          pageInfo: [
+   873→            {
+   874→              $count: 'totalRecords',
+   875→            },
+   876→          ],
+   877→        },
+   878→      },
+   879→    ])
+   880→
+   881→    const bookings: env.BookingInfo[] = data[0].resultData
+   882→
+   883→    for (const booking of bookings) {
+   884→      const { _id, fullName, avatar } = booking.agency
+   885→      booking.agency = { _id, fullName, avatar }
+   886→    }
+   887→
+   888→    res.json(data)
+   889→  } catch (err) {
+   890→    logger.error(`[booking.getBookings] ${i18n.t('ERROR')} ${JSON.stringify(req.body)}`, err)
+   891→    res.status(400).send(i18n.t('ERROR') + err)
+   892→  }
+   893→}
+   894→
+   895→/**
+   896→ * Check if a customer has Bookings.
+   897→ *
+   898→ * @export
+   899→ * @async
+   900→ * @param {Request} req
+   901→ * @param {Response} res
+   902→ * @returns {unknown}
+   903→ */
+   904→export const hasBookings = async (req: Request, res: Response) => {
+   905→  const { renter } = req.params
+   906→
+   907→  try {
+   908→    const count = await Booking
+   909→      .find({
+   910→        renter: new mongoose.Types.ObjectId(renter),
+   911→      })
+   912→      .limit(1)
+   913→      .countDocuments()
+   914→
+   915→    if (count === 1) {
+   916→      res.sendStatus(200)
+   917→      return
+   918→    }
+   919→
+   920→    res.sendStatus(204)
+   921→  } catch (err) {
+   922→    logger.error(`[booking.hasBookings] ${i18n.t('ERROR')} ${renter}`, err)
+   923→    res.status(400).send(i18n.t('ERROR') + err)
+   924→  }
+   925→}
+   926→
+   927→/**
+   928→ * Cancel a Booking.
+   929→ *
+   930→ * @export
+   931→ * @async
+   932→ * @param {Request} req
+   933→ * @param {Response} res
+   934→ * @returns {unknown}
+   935→ */
+   936→export const cancelBooking = async (req: Request, res: Response) => {
+   937→  const { id } = req.params
+   938→
+   939→  try {
+   940→    const booking = await Booking
+   941→      .findOne({
+   942→        _id: new mongoose.Types.ObjectId(id),
+   943→      })
+   944→      .populate<{ agency: env.User }>('agency')
+   945→      .populate<{ renter: env.User }>('renter')
+   946→
+   947→    if (booking && booking.cancellation && !booking.cancelRequest) {
+   948→      booking.cancelRequest = true
+   949→      await booking.save()
+   950→
+   951→      // Notify agency
+   952→      const agency = await User.findById(booking.agency)
+   953→      if (!agency) {
+   954→        logger.info(`Agency ${booking.agency} not found`)
+   955→        res.sendStatus(204)
+   956→        return
+   957→      }
+   958→      i18n.locale = agency.language
+   959→      await notify(booking.renter, booking._id.toString().toString(), agency, i18n.t('CANCEL_BOOKING_NOTIFICATION'))
+   960→
+   961→      // Notify admin
+   962→      const admin = !!env.ADMIN_EMAIL && (await User.findOne({ email: env.ADMIN_EMAIL, type: movininTypes.UserType.Admin }))
+   963→      if (admin) {
+   964→        i18n.locale = admin.language
+   965→        await notify(booking.renter, booking._id.toString().toString(), admin, i18n.t('CANCEL_BOOKING_NOTIFICATION'))
+   966→      }
+   967→
+   968→      res.sendStatus(200)
+   969→      return
+   970→    }
+   971→
+   972→    res.sendStatus(204)
+   973→  } catch (err) {
+   974→    logger.error(`[booking.cancelBooking] ${i18n.t('ERROR')} ${id}`, err)
+   975→    res.status(400).send(i18n.t('ERROR') + err)
+   976→  }
+   977→}
+   978→
