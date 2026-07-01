@@ -132,3 +132,78 @@ export function rangesOverlap(
 ): boolean {
   return startA < endB && startB < endA
 }
+
+// ─── movinin extension: cancellation fee + 3-channel notification dispatch ─
+
+/**
+ * Calculate cancellation fee (movinin pattern).
+ * Based on rental term + days until start.
+ */
+export function calculateCancellationFee(
+  totalPriceCents: number,
+  startDate: Date,
+  cancellationPolicy: string | null,
+  now: Date = new Date(),
+): { fee_cents: number; refund_cents: number; policy_applied: string } {
+  const daysUntilStart = Math.ceil((startDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+
+  // No fee if cancelling well in advance
+  if (daysUntilStart > 7) {
+    return { fee_cents: 0, refund_cents: totalPriceCents, policy_applied: 'full_refund' }
+  }
+
+  // 50% refund if 3-7 days before
+  if (daysUntilStart > 2) {
+    const refund = Math.round(totalPriceCents * 0.5)
+    return { fee_cents: totalPriceCents - refund, refund_cents: refund, policy_applied: '50_percent_refund' }
+  }
+
+  // No refund if less than 2 days (unless policy says otherwise)
+  if (cancellationPolicy && cancellationPolicy.toLowerCase().includes('flexible')) {
+    const refund = Math.round(totalPriceCents * 0.25)
+    return { fee_cents: totalPriceCents - refund, refund_cents: refund, policy_applied: 'flexible_25_percent' }
+  }
+
+  return { fee_cents: totalPriceCents, refund_cents: 0, policy_applied: 'no_refund_within_48h' }
+}
+
+/**
+ * 3-channel notification dispatch (movinin pattern).
+ * Creates notification rows for ALL 3 channels: IN_APP, EMAIL, PUSH.
+ * The /api/notifications/process worker picks these up and delivers them.
+ */
+export async function dispatch3ChannelNotification(
+  userId: string,
+  notificationType: string,
+  subject: string,
+  body: string,
+  priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' = 'MEDIUM',
+): Promise<{ in_app: boolean; email: boolean; push: boolean }> {
+  const { supabase } = await import("@planviry/db")
+
+  const channels = [
+    { channel: 'IN_APP' as const },
+    { channel: 'EMAIL' as const },
+    { channel: 'PUSH' as const },
+  ]
+
+  const rows = channels.map(c => ({
+    user_id: userId,
+    notification_type: notificationType,
+    channel: c.channel,
+    priority,
+    subject,
+    body,
+    data_payload: {},
+    status: 'QUEUED',
+    rate_limit_category: priority === 'CRITICAL' ? 'CRITICAL' : 'NON_CRITICAL',
+  }))
+
+  const { error } = await supabase.from('notifications').insert(rows)
+
+  return {
+    in_app: !error,
+    email: !error,
+    push: !error,
+  }
+}

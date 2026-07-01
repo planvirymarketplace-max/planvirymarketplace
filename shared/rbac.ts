@@ -181,3 +181,88 @@ export async function fanOutNotification(
 
   return data?.length ?? 0;
 }
+
+// ─── Peppermint extension: dynamic roles, inheritance, team-scoped, toggling ─
+
+/**
+ * Check if roles system is active (Peppermint config.roles_active pattern).
+ */
+export function isRoleActive(role: string, activeRoles: string[] | null): boolean {
+  if (activeRoles === null) return true // null = all roles active
+  return activeRoles.includes(role)
+}
+
+/**
+ * Resolve permission inheritance chain.
+ * If role A inherits from role B, A gets all of B's permissions.
+ */
+export function resolveInheritedPermissions(
+  role: string,
+  inheritanceMap: Record<string, string[]>,
+): PlanviryPermission[] {
+  const visited = new Set<string>()
+  const permissions = new Set<PlanviryPermission>()
+
+  function resolve(r: string) {
+    if (visited.has(r)) return
+    visited.add(r)
+    const perms = ROLE_PERMISSIONS[r] ?? []
+    perms.forEach(p => permissions.add(p))
+    const parents = inheritanceMap[r] ?? []
+    parents.forEach(parent => resolve(parent))
+  }
+
+  resolve(role)
+  return Array.from(permissions)
+}
+
+/**
+ * Check team-scoped permission.
+ * User must have the permission AND be a member of the specified team.
+ */
+export function hasTeamPermission(
+  role: string,
+  permission: PlanviryPermission,
+  teamId: string,
+  userTeams: string[],
+): boolean {
+  if (!userTeams.includes(teamId)) return false
+  return hasPermission(role, permission)
+}
+
+/**
+ * Create a custom role with specific permissions.
+ * (Peppermint dynamic role creation pattern)
+ */
+export function createCustomRole(
+  roleName: string,
+  permissions: PlanviryPermission[],
+  inheritsFrom: string[] = [],
+): { name: string; permissions: PlanviryPermission[]; inheritsFrom: string[] } {
+  return { name: roleName, permissions, inheritsFrom }
+}
+
+/**
+ * Service ticket triage priority calculation (Peppermint pattern).
+ * Assigns priority score based on urgency + age + category.
+ */
+export function calculateTicketPriority(
+  createdAt: Date,
+  category: 'RESERVATION' | 'BILLING' | 'TECHNICAL' | 'FEEDBACK' | 'OTHER',
+  isUrgent: boolean = false,
+): { priority: 'URGENT' | 'HIGH' | 'NORMAL' | 'LOW'; score: number } {
+  const ageHours = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60)
+  let score = 0
+
+  if (isUrgent) score += 100
+  if (category === 'RESERVATION' || category === 'BILLING') score += 50
+  if (category === 'TECHNICAL') score += 30
+  if (ageHours > 24) score += 40
+  if (ageHours > 48) score += 20
+  if (ageHours > 72) score += 20
+
+  if (score >= 100) return { priority: 'URGENT', score }
+  if (score >= 50) return { priority: 'HIGH', score }
+  if (score >= 20) return { priority: 'NORMAL', score }
+  return { priority: 'LOW', score }
+}
