@@ -1,0 +1,14 @@
+{
+  "name": "@planviry/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Planviry mobile app — Flutter + Supabase (Part LIV)",
+  "scripts": {
+    "dev": "flutter run",
+    "build:android": "flutter build apk --release",
+    "build:ios": "flutter build ios --release",
+    "lint": "flutter analyze",
+    "test": "flutter test",
+    "clean": "flutter clean"
+  }
+}
