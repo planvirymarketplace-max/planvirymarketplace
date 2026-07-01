@@ -1,7 +1,7 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { GatedSurfacePage } from '@/components/GatedSurfacePage'
-
-export default function Page() {
-  return <GatedSurfacePage surface="travel" />
+// /travel → redirects to lodging search (Staybnb module)
+// The travel vertical is the lodging layer: hotels, vacation rentals, homes
+export default function TravelPage() {
+  redirect('/travel/search')
 }

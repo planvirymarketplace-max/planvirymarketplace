@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-// /api/travel/search — lodging module API (Staybnb adaptation)
+// /api/travel/listings — lodging module API (Staybnb adaptation)
 // Mounted per Part 53: Staybnb API routes under /api/travel/*
 
 export async function GET(request: NextRequest) {
