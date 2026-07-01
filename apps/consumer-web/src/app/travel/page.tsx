@@ -1,18 +1,16 @@
-import TravelPage from '@/components/travel/TravelPage'
+import { GatedSurfacePage } from '@/components/GatedSurfacePage'
 
-// /travel — Planviry travel marketplace.
+// /travel → surface page backed by inventory_items.category = LODGING
 //
-// Previously this rendered <GatedSurfacePage surface="travel" inventoryCategory="LODGING" />
-// which produced a 2-column immersive gate (hero image left, form right) that did
-// NOT match the user's original design.
+// Previously this redirected to /travel/search → /lodging/search (Staybnb's
+// standalone page), which broke the orchestration: the user clicked Travel
+// in the sidebar and landed on a completely different layout with no gate,
+// no surface cards, and no way back to the sidebar flow.
 //
-// The user's design is a single-page horizontal layout: a search filter bar
-// (WHAT/WHERE/WHEN/PRICE/ATTENDEES/FILTERS/CLEAR + Search button) at the top,
-// a dark navy secondary nav bar (All travel / Places to stay / Flights / Cars /
-// Destinations / Group Trip), a section header (Travel title + subtitle + SORT),
-// and a 3-column premium card grid below. All rendered inside the AppLayoutShell
-// that /travel/layout.tsx already provides — so this page just renders
-// <TravelPage />.
-export default function TravelRoute() {
-  return <TravelPage />
+// Now /travel is a first-class surface — same GatedSurfacePage pattern as
+// /services, /food-drink, /spaces, etc. — so the sidebar persists, the
+// intent gate (WHAT/WHERE) renders, and the live LODGING inventory grid
+// shows below.
+export default function TravelPage() {
+  return <GatedSurfacePage surface="travel" inventoryCategory="LODGING" />
 }

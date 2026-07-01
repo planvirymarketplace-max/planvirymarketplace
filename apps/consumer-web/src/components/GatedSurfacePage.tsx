@@ -4,32 +4,26 @@ import { useSearchParams } from 'next/navigation'
 import { useEffect } from 'react'
 import { AppLayout } from '@/components/AppLayout'
 import { MarketplaceFeed } from '@/components/MarketplaceFeed'
+import { IntentGate } from '@/components/orchestration/IntentGate'
 import { SurfaceLiveInventory } from '@/components/SurfaceLiveInventory'
 import { useApp } from '@/context/AppContext'
 
-/**
- * GatedSurfacePage — renders a surface page (one of the 9 sidebar lenses).
- *
- * ARCHITECTURE (per user spec):
- * - The sidebar is always present (AppLayout provides it).
- * - Clicking a sidebar lens goes DIRECTLY to the surface page. NO gate.
- * - The user can browse cards freely without setting what/where.
- * - The search filter bar is present but optional — if the user fills it in,
- *   the results filter. If not, all cards show.
- * - Auth gate only triggers when the user clicks "Add to Plan" (cart) or
- *   "Checkout" — NOT on page view.
- *
- * Previously this component rendered an IntentGate that blocked the page
- * unless what+where were set. That was wrong — it blocked browsing.
- */
 interface GatedSurfacePageProps {
   surface: string
+  /**
+   * P4-1: the inventory_items.category filter backing this surface. When
+   * supplied, GatedSurfacePage injects `?category=X` into the URL and renders
+   * the live-inventory panel below the marketplace feed.
+   */
   inventoryCategory?: string
+  /** P4-1: alternative — multiple categories (IN-style filter). */
   inventoryCategories?: string[]
 }
 
 export function GatedSurfacePage({
   surface,
+  inventoryCategory,
+  inventoryCategories,
 }: GatedSurfacePageProps) {
   const searchParams = useSearchParams()
   const what = searchParams.get('what') || undefined
@@ -41,13 +35,55 @@ export function GatedSurfacePage({
     if (what) setSearchWhat(what)
     if (where) setSearchWhere(where)
     setActiveCategory(surface as any)
-  }, [what, where, surface, setSearchWhat, setSearchWhere, setActiveCategory])
+  }, [what, where, surface])
 
-  // No gate. Show the marketplace feed + live inventory directly.
-  // The user can browse freely. Auth only prompts on Add to Plan / Checkout.
+  // P4-1: surface → inventory_items.category filter documentation.
+  // The actual Supabase query lives in <SurfaceLiveInventory />.
+  // const liveInventoryCategories = inventoryCategories ?? (inventoryCategory ? [inventoryCategory] : [])
+
+  // ─── Sidebar is the orchestration ───────────────────────────────────
+  // Every return path MUST wrap in <AppLayout> so the sidebar persists.
+  // Previously only the "both what+where set" branch wrapped — default
+  // visits to /services, /things-to-do, etc. lost the sidebar entirely.
+
+  // Intent gate: if both missing, show 2-column gate
+  if (!what && !where) {
+    return (
+      <AppLayout>
+        <IntentGate surface={surface} missing="both" />
+        {/* P4-1/4-2: still surface the live inventory + subcategory pills so
+            the page has real content even before the user enters intent. */}
+        <SurfaceLiveInventory surface={surface} />
+      </AppLayout>
+    )
+  }
+
+  // If what set but where missing
+  if (what && !where) {
+    return (
+      <AppLayout>
+        <IntentGate surface={surface} missing="where" existingWhat={what} />
+        <SurfaceLiveInventory surface={surface} />
+      </AppLayout>
+    )
+  }
+
+  // If where set but what missing
+  if (!what && where) {
+    return (
+      <AppLayout>
+        <IntentGate surface={surface} missing="what" existingWhere={where} />
+        <SurfaceLiveInventory surface={surface} />
+      </AppLayout>
+    )
+  }
+
+  // Both set — show the marketplace feed inside the app layout
   return (
     <AppLayout>
       <MarketplaceFeed category={surface as any} />
+      {/* P4-1: live inventory_items filtered by category for this surface.
+          P4-2: subcategory pills pulled from vendor_categories / taxonomy_nodes. */}
       <SurfaceLiveInventory surface={surface} />
     </AppLayout>
   )

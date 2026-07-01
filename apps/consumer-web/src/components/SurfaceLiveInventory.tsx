@@ -6,10 +6,13 @@ import {
   getInventoryCategoriesForSurface,
   type SurfaceSlug,
 } from '@/lib/surface-inventory-map'
-import { Loader2, MapPin, Star, ArrowRight } from 'lucide-react'
+import { Loader2, MapPin, Database, AlertCircle } from 'lucide-react'
+
+// Pulls subcategory pills from the existing seed taxonomy so each surface
+// shows its own curated subcategory list (P4-2). For surfaces with no entry,
+// falls back to the live `taxonomy_nodes` table at runtime (best-effort).
 import { SUB_CATEGORIES } from '@/data/prototype-data'
 import { categories as TAXONOMY } from '@/data/categories'
-import { useCart } from '@/lib/cart-context'
 
 interface InventoryItemRow {
   id: string
@@ -21,7 +24,6 @@ interface InventoryItemRow {
   status: string | null
   metadata: Record<string, unknown> | null
   locations?: { name: string | null; region: string | null } | { name: string | null; region: string | null }[] | null
-  media_assets?: { url: string | null } | { url: string | null }[] | null
 }
 
 interface SurfaceLiveInventoryProps {
@@ -51,49 +53,10 @@ function locationLabel(loc: InventoryItemRow['locations']): string | null {
   return [loc.name, loc.region].filter(Boolean).join(', ')
 }
 
-function primaryImage(item: InventoryItemRow): string | null {
-  const media = item.media_assets
-  if (media) {
-    if (Array.isArray(media)) {
-      if (media[0]?.url) return media[0].url
-    } else if (media.url) {
-      return media.url
-    }
-  }
-  const meta = (item.metadata ?? {}) as Record<string, unknown>
-  const candidates = [meta.image, meta.image_url, meta.photo_url, meta.thumbnail, meta.cover_image]
-  for (const c of candidates) {
-    if (typeof c === 'string' && c.length > 0) return c
-  }
-  return null
-}
-
-function badgeFor(item: InventoryItemRow): string | null {
-  const meta = (item.metadata ?? {}) as Record<string, unknown>
-  if (meta.badge && typeof meta.badge === 'string') return meta.badge
-  if (meta.tier && typeof meta.tier === 'string') return meta.tier.toUpperCase()
-  if (meta.verified === true) return 'VERIFIED'
-  return null
-}
-
-function ratingFor(item: InventoryItemRow): number | null {
-  const meta = (item.metadata ?? {}) as Record<string, unknown>
-  if (typeof meta.rating === 'number') return meta.rating
-  if (typeof meta.star_rating === 'number') return meta.star_rating
-  return null
-}
-
-function descriptionFor(item: InventoryItemRow): string {
-  const meta = (item.metadata ?? {}) as Record<string, unknown>
-  if (typeof meta.description === 'string') return meta.description
-  if (typeof meta.short_description === 'string') return meta.short_description
-  return ''
-}
-
-// Per-surface taxonomy → L2 subcategories for the pill bar
+// ─── Per-surface taxonomy → L2 subcategories for the pill bar (P4-2) ────────
 const TAXONOMY_L1_BY_SURFACE: Record<string, string> = {
   services: 'event-planning-coordination',
-  'things-to-do': 'attractions',
+  'things-to-do': 'attractions', // not a real L1 in seed; falls back to SUB_CATEGORIES
   'food-drink': 'catering-food',
   'live-shows': 'entertainment',
   party: 'venues-event-spaces',
@@ -104,6 +67,7 @@ const TAXONOMY_L1_BY_SURFACE: Record<string, string> = {
 }
 
 function getSubcategoryPills(surface: string): string[] {
+  // First try the seed taxonomy L1's L2 children
   const l1Slug = TAXONOMY_L1_BY_SURFACE[`${surface}`]
   if (l1Slug) {
     const l1 = TAXONOMY.find(c => c.slug === l1Slug)
@@ -111,27 +75,17 @@ function getSubcategoryPills(surface: string): string[] {
       return l1.level2.map(l2 => l2.name)
     }
   }
+  // Fall back to the prototype-data SUB_CATEGORIES (already curated per surface)
   return SUB_CATEGORIES[`${surface}` as keyof typeof SUB_CATEGORIES] ?? []
-}
-
-// Human-readable label for a category enum value
-const CATEGORY_LABELS: Record<string, string> = {
-  LODGING: 'Travel',
-  DINING: 'Dining',
-  EVENT_TICKET: 'Live Shows',
-  ACTIVITY: 'Things to Do',
-  TRANSPORT: 'Transport',
-  VENUE_RENTAL: 'Spaces',
-  SERVICE: 'Services',
 }
 
 export function SurfaceLiveInventory({ surface }: SurfaceLiveInventoryProps) {
   const supabase = createClient()
-  const cart = useCart()
   const inventoryCategories = useMemo(() => getInventoryCategoriesForSurface(surface), [surface])
 
   const [items, setItems] = useState<InventoryItemRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [activeSub, setActiveSub] = useState<string>('all')
 
   const subcategoryPills = useMemo(() => getSubcategoryPills(surface), [surface])
@@ -143,12 +97,12 @@ export function SurfaceLiveInventory({ surface }: SurfaceLiveInventoryProps) {
       return
     }
     setLoading(true)
+    setError('')
     let query = supabase
       .from('inventory_items')
       .select(`
         id, title, slug, category, base_price_cents, currency, status, metadata,
-        locations(name, region),
-        media_assets(url)
+        locations(name, region)
       `)
       .eq('status', 'PUBLISHED')
       .order('created_at', { ascending: false })
@@ -160,12 +114,19 @@ export function SurfaceLiveInventory({ surface }: SurfaceLiveInventoryProps) {
       query = query.in('category', inventoryCategories)
     }
 
-    const { data } = await query
+    const { data, error: fetchErr } = await query
+    if (fetchErr) {
+      setError(fetchErr.message)
+    }
     setItems((data as InventoryItemRow[] | null) ?? [])
     setLoading(false)
   }, [supabase, inventoryCategories])
 
   useEffect(() => {
+    // Initial data fetch — calls setState as data resolves. This is the
+    // standard fetch-on-mount pattern; the rule fires because `load()` writes
+    // state synchronously, but the async boundary keeps it cascade-free.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load()
   }, [load])
 
@@ -180,19 +141,40 @@ export function SurfaceLiveInventory({ surface }: SurfaceLiveInventoryProps) {
   }, [items, activeSub])
 
   if (inventoryCategories.length === 0) {
-    return null
+    return null // surface has no inventory filter (e.g. /vendors "all categories" handled elsewhere)
   }
 
-  const surfaceLabel = CATEGORY_LABELS[inventoryCategories[0]] ?? surface
-
   return (
-    <section className="w-full px-4 md:px-8 py-8">
-      {/* Subcategory pills */}
+    <section className="w-full px-margin-mobile md:px-margin-desktop py-12 border-t border-midnight-slate/5">
+      <div className="flex items-baseline justify-between mb-4 gap-4 flex-wrap">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-midnight-slate/40 mb-1 flex items-center gap-1">
+            <Database className="w-3 h-3" /> Live inventory
+          </p>
+          <h2 className="font-serif text-2xl text-midnight-slate font-bold">
+            From the marketplace
+          </h2>
+          <p className="text-midnight-slate/60 text-xs mt-1">
+            Filtered by{' '}
+            <code className="font-mono text-[11px] bg-midnight-slate/5 px-1 rounded">
+              inventory_items.category IN ({inventoryCategories.map(c => `'${c}'`).join(', ')})
+            </code>
+          </p>
+        </div>
+        <button
+          onClick={load}
+          className="text-xs font-bold text-midnight-slate/60 hover:text-midnight-slate"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {/* Subcategory pills — P4-2 */}
       {subcategoryPills.length > 0 && (
         <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar whitespace-nowrap py-1 mb-6">
           <button
             onClick={() => setActiveSub('all')}
-            className={`px-4 py-1.5 rounded-full text-xs font-semibold tracking-wide transition-all whitespace-nowrap ${
+            className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-wide transition-all whitespace-nowrap ${
               activeSub === 'all'
                 ? 'bg-midnight-slate text-white'
                 : 'bg-white border border-midnight-slate/10 text-midnight-slate/60 hover:border-midnight-slate/30'
@@ -204,7 +186,7 @@ export function SurfaceLiveInventory({ surface }: SurfaceLiveInventoryProps) {
             <button
               key={sub}
               onClick={() => setActiveSub(sub)}
-              className={`px-4 py-1.5 rounded-full text-xs font-semibold tracking-wide transition-all whitespace-nowrap ${
+              className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-wide transition-all whitespace-nowrap ${
                 activeSub.toLowerCase() === sub.toLowerCase()
                   ? 'bg-midnight-slate text-white'
                   : 'bg-white border border-midnight-slate/10 text-midnight-slate/60 hover:border-midnight-slate/30'
@@ -216,102 +198,61 @@ export function SurfaceLiveInventory({ surface }: SurfaceLiveInventoryProps) {
         </div>
       )}
 
-      {/* Card grid */}
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 mb-4 flex items-center gap-2">
+          <AlertCircle className="w-3 h-3" /> {error}
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-6 h-6 animate-spin text-midnight-slate/40" />
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-xl border border-dashed border-midnight-slate/10">
-          <p className="text-midnight-slate/50 text-sm">
-            No listings yet. Be the first to add one.
+        <div className="text-center py-12 bg-white rounded-xl border border-dashed border-outline-variant">
+          <p className="text-on-surface-variant text-sm">
+            No live inventory matches this filter yet. Be the first to list one.
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map(item => {
             const loc = locationLabel(item.locations)
-            const img = primaryImage(item)
-            const badge = badgeFor(item)
-            const rating = ratingFor(item)
-            const desc = descriptionFor(item)
-            const price = formatPrice(item.base_price_cents, item.currency)
-            const detailHref = item.slug ? `/${surface}/${item.slug}` : `/${surface}/${item.id}`
-
+            const meta = (item.metadata ?? {}) as Record<string, unknown>
+            const sub = (meta.subcategory ?? meta.sub_category ?? null) as string | null
             return (
-              <div
+              <a
                 key={item.id}
-                className="group bg-white rounded-xl border border-midnight-slate/10 overflow-hidden hover:shadow-lg transition-all"
+                href={`/vendor/${item.slug ?? item.id}`}
+                className="group bg-white rounded-xl border border-midnight-slate/5 overflow-hidden hover:shadow-md transition-all"
               >
-                {/* Image */}
-                <a href={detailHref} className="block relative h-48 overflow-hidden bg-midnight-slate/5">
-                  {img ? (
-                    <img
-                      src={img}
-                      alt={item.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <span className="text-xs font-bold uppercase tracking-widest text-midnight-slate/30">
-                        {surfaceLabel}
-                      </span>
-                    </div>
-                  )}
-                  {/* Badge */}
-                  {badge && (
-                    <span className="absolute top-3 left-3 bg-midnight-slate text-white text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded">
-                      {badge}
-                    </span>
-                  )}
-                  {/* Rating */}
-                  {rating && (
-                    <span className="absolute top-3 right-3 bg-white/90 backdrop-blur text-midnight-slate text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
-                      <Star className="w-3 h-3 fill-champagne-gold text-champagne-gold" />
-                      {rating}
-                    </span>
-                  )}
-                </a>
-
-                {/* Body */}
+                <div className="relative h-40 bg-gradient-to-br from-midnight-slate/5 to-midnight-slate/10 flex items-center justify-center">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-midnight-slate/40">
+                    {item.category ?? '—'}
+                  </span>
+                </div>
                 <div className="p-4">
-                  <h3 className="font-serif text-base font-bold text-midnight-slate group-hover:text-champagne-gold transition-colors line-clamp-1">
-                    <a href={detailHref}>{item.title}</a>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-champagne-gold mb-1">
+                    {sub ?? item.category}
+                  </p>
+                  <h3 className="font-serif text-base text-midnight-slate group-hover:text-champagne-gold transition-colors line-clamp-2">
+                    {item.title}
                   </h3>
                   {loc && (
-                    <p className="text-xs text-midnight-slate/60 mt-1 flex items-center gap-1">
+                    <p className="text-[11px] text-midnight-slate/60 mt-1 flex items-center gap-1">
                       <MapPin className="w-3 h-3" /> {loc}
                     </p>
                   )}
-                  {desc && (
-                    <p className="text-xs text-midnight-slate/50 mt-2 line-clamp-2">{desc}</p>
-                  )}
-                  <div className="flex items-center justify-between mt-4 pt-3 border-t border-midnight-slate/5">
-                    <span className="text-sm font-bold text-midnight-slate">{price}</span>
-                    <div className="flex items-center gap-2">
-                      <a
-                        href={detailHref}
-                        className="text-xs font-semibold text-midnight-slate/60 hover:text-midnight-slate border border-midnight-slate/20 hover:border-midnight-slate px-3 py-1.5 rounded-lg transition-all"
-                      >
-                        Details
-                      </a>
-                      <button
-                        onClick={() => cart?.addItem?.({
-                          id: item.id,
-                          type: 'service',
-                          title: item.title,
-                          price: item.base_price_cents ?? 0,
-                          image: img,
-                          slug: item.slug ?? item.id,
-                        } as any)}
-                        className="text-xs font-semibold text-white bg-midnight-slate hover:bg-midnight-slate/90 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
-                      >
-                        Add to Plan <ArrowRight className="w-3 h-3" />
-                      </button>
-                    </div>
+                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-midnight-slate/5">
+                    <span className="text-sm font-bold text-midnight-slate">
+                      {formatPrice(item.base_price_cents, item.currency)}
+                    </span>
+                    <span className="text-[10px] font-bold uppercase text-midnight-slate/40">
+                      {item.status}
+                    </span>
                   </div>
                 </div>
-              </div>
+              </a>
             )
           })}
         </div>
