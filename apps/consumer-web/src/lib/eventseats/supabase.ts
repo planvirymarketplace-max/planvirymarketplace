@@ -236,3 +236,4 @@ export type Database = {
     }
   }
 }
+export { createAdminClient as getServerSupabase, createAdminClient as supabase } from "@/lib/supabase/admin"
