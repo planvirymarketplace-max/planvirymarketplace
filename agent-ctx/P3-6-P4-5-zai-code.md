@@ -75,3 +75,41 @@ Next.js 16's `permanentRedirect()` issues HTTP 308 (the modern permanent redirec
 - The `[slug]/[citySlug]/[verticalSlug]/page.tsx` file has 3 pre-existing TS errors (JSX closing-tag mismatch). Out of scope for this task.
 - `/vendor/events` page is untouched — dashboard nav now points to `/vendor/messages`. To fully retire `/vendor/events`, replace its page.tsx with `permanentRedirect('/vendor/messages')`.
 - `MarketplaceFeed.tsx`'s existing subcategory pill bar (lines 371-402) and `FilterMegaMenu` wiring (line 335) were already in place from prior tasks — verified intact, no changes needed for P4-2/P4-3.
+
+---
+
+## Verification Pass (re-invocation after orchestrator flagged a timeout)
+
+The orchestrator dispatched this task again noting "a previous agent timed out on this task." All artifacts from the original pass were already saved to disk before the timeout — this re-invocation confirms completeness; no code was rewritten.
+
+### Files re-verified present and well-formed
+
+| Path | Bytes | Notes |
+|---|---|---|
+| `apps/consumer-web/src/app/vendor/pms/page.tsx` | 14 172 | P3-6 — LODGING filter + metadata.room_status update via `supabase.from('inventory_items').update({metadata})` (lines 131-134). Status pills Clean/Dirty/Inspected/Out-of-Order, summary cards, filter pills, per-room status `<select>` with merge-into-existing-metadata pattern. |
+| `apps/consumer-web/src/app/vendor/tickets/page.tsx` | 23 087 | P3-7 — `service_tickets` SELECT includes `title, status, assigned_to, created_at, updated_at, reservation_id, metadata`. `updateTicket()` (line 226) writes `status`/`assigned_to` columns and merges `metadata.category`/`metadata.manual_priority`/`metadata.is_urgent`. Priority badge uses `calculateTicketPriority` from `@planviry/shared/rbac-client`. |
+| `apps/consumer-web/src/app/vendor/messages/page.tsx` | 19 719 | P3-8 — `notifications` query `.eq('user_id', user.id).like('notification_type', 'organizer_message%')`. Reply composer POSTs to `/api/messages/send` (line 211) with `{event_id, subject, body, recipient_filter}`; clears form on success; surfaces `notifications_created` count. |
+| `apps/consumer-web/src/app/vendor/availability/page.tsx` | 24 536 | P3-9 — FullCalendar (`@fullcalendar/react` + `daygrid` + `interaction`) wired. Item picker, slot preview from `/api/inventory/[id]/slots` (calls `getSlots` in `shared/slots.ts` server-side), `handleAddBlackout()` inserts `availability_blocks` row with `is_available=false`, buffer settings written to `inventory_items.metadata.buffer_before/after`. |
+| `apps/consumer-web/src/app/vendor/promotions/page.tsx` | 23 401 | P3-10 — `discounts` SELECT (code, discount_type, discount_value, max_uses, uses, status, expires_at). `handleSave` (line 150) does insert-or-update, `handleDelete` (line 204) hard-deletes, `handleToggleStatus` (line 219) flips ACTIVE↔PAUSED. |
+| `apps/consumer-web/src/components/SurfaceLiveInventory.tsx` | 10 200 | P4-1/P4-2 — queries `inventory_items` with `.eq('category', X)` or `.in('category', [...])`; subcategory pill bar sourced from `data/categories.ts` L2 (fallback to `data/prototype-data.ts` `SUB_CATEGORIES`). |
+| `apps/consumer-web/src/lib/surface-inventory-map.ts` | 2 289 | P4-1 — `SURFACE_TO_INVENTORY` exports the 9-surface → category map; `getInventoryCategoriesForSurface()` is consumed by `SurfaceLiveInventory`. |
+| 7 surface pages (`/services`, `/things-to-do`, `/food-drink`, `/live-shows`, `/party`, `/spaces`, `/vendors`) | 229-309 B each | P4-1 — each page passes `inventoryCategory`/`inventoryCategories` to `GatedSurfacePage`. |
+| 5 slug-redirect pages (`/v/[slug]`, `/s/[slug]`, `/browse/[slug]`, `/vendors/[slug]`, `/venue/[slug]`) | 544-744 B each | P4-4 — each calls `permanentRedirect()` to the canonical path. |
+| 8 ticket-redirect pages (`/tickets/sports`, `/tickets/sports/[slug]`, `/tickets/sports/[slug]/[conference]`, `/tickets/sports/team/[team]`, `/tickets/sports/team/[team]/schedule`, `/tickets/sports/team/[team]/seating-chart`, `/tickets/cities`, `/tickets/cities/[city]`) | 367-500 B each | P4-5 — each `permanentRedirect()` to `/tickets/whats-on` with appropriate query params. |
+
+### Static checks
+
+- `cd apps/consumer-web && bunx tsc --noEmit` → only 3 pre-existing errors in `src/app/[slug]/[citySlug]/[verticalSlug]/page.tsx` (untouched, out of scope). **0 errors in any new/modified file.**
+- `cd apps/consumer-web && bun run lint` → 33 errors + 13 warnings, **all in pre-existing files** (`useMediaQuery.tsx`, `VendorProfileClient.tsx`, `BookingForm.tsx`, `card-stack.tsx`, etc.). 0 errors in any new/modified file.
+
+### Runtime verification via dev server
+
+- `curl /services, /things-to-do, /food-drink, /live-shows, /party, /spaces` → all `200` with clean compile in `dev.log`.
+- `curl /tickets/sports, /tickets/cities` → `308` (permanent redirect).
+- `curl /v/some-slug, /s/some-slug, /browse/some-slug, /venue/some-slug` → `308`.
+- `curl /tickets/whats-on` → `200` (canonical redirect target renders).
+- `curl /vendor/{pms,tickets,messages,availability,promotions}` → `307` (auth middleware redirects to `/login`; expected, all vendor pages are auth-gated).
+
+### Conclusion
+
+All 10 items (P3-6, P3-7, P3-8, P3-9, P3-10, P4-1, P4-2, P4-3, P4-4, P4-5) are complete and verified. No further code changes were required for this re-invocation.
