@@ -43,17 +43,17 @@ void main() async {
 final supabase = Supabase.instance.client;
 final navigatorKey = GlobalKey<NavigatorState>();
 
-// Brand colors — Haiti-inspired Caribbean palette
+// Brand colors — Planviry palette (mapped from htbiz Caribbean to Planviry)
 class AppColors {
-  static const primary = Color(0xFF1B4F72);      // Deep ocean blue
-  static const primaryDark = Color(0xFF0E3A5C);   // Darker blue
-  static const primaryLight = Color(0xFFD4E6F1);  // Soft sky blue
-  static const accent = Color(0xFFE8A838);        // Warm golden amber
-  static const surface = Color(0xFFFAF8F5);       // Warm off-white
+  static const primary = Color(0xFF0F172A);       // midnight-slate (was deep ocean blue)
+  static const primaryDark = Color(0xFF131B2E);   // primary-container (was darker blue)
+  static const primaryLight = Color(0xFFF1F5F9);  // surface-container-low (was soft sky blue)
+  static const accent = Color(0xFFC5A059);        // champagne-gold (was warm golden amber)
+  static const surface = Color(0xFFF7F9FB);       // refined-offwhite (was warm off-white)
   static const card = Colors.white;
-  static const textPrimary = Color(0xFF1C2833);
-  static const textSecondary = Color(0xFF6C7A89);
-  static const divider = Color(0xFFE8E4DF);       // Warm gray divider
+  static const textPrimary = Color(0xFF191C1E);   // on-surface
+  static const textSecondary = Color(0xFF64748B);  // on-surface-variant (was #6C7A89)
+  static const divider = Color(0xFFC6C6CD);       // outline-variant (was warm gray)
 }
 
 class HTBizApp extends StatefulWidget {

@@ -61,6 +61,30 @@
   --color-brand-orange: #F47245;
   --color-brand-teal: #009689;
 
+  /* ─── Staybnb token aliases (maps to Planviry palette) ─── */
+  --color-my-green-extra-light: #FFF8E1;
+  --color-my-green-light: #FFE89F;
+  --color-my-green: #FED65B;
+  --color-my-green-semi-bold: #C5A059;
+  --color-my-green-bold: #0D9488;
+  --color-my-green-dark: #0F172A;
+  --color-my-green-complement: #F1F5F9;
+  --color-my-gray-extra-light: #76777d;
+  --color-my-gray: #64748B;
+  --color-my-gray-light: #C6C6CD;
+  --color-my-gray-dark: #0F172A;
+  --color-my-purple: #25005a;
+  --color-my-purple-bold: #0D9488;
+
+  /* ─── EventSeats token aliases (maps to Planviry palette) ─── */
+  --color-es-primary: #0F172A;
+  --color-es-secondary: #FED65B;
+  --color-es-tertiary: #0D9488;
+  --color-es-highlight: #C5A059;
+  --color-es-lowlight: #64748B;
+  --color-es-peach: #BA1A1A;
+  --color-es-yellow: #FFE088;
+
   --spacing-margin-desktop: 64px;
   --spacing-margin-mobile: 20px;
   --spacing-gutter: 24px;
