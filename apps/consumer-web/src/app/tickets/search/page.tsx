@@ -1,4 +1,3 @@
-import { AppLayoutShell } from '@/components/AppLayoutShell'
 import type { Metadata } from 'next'
 import { TicketDirectoryClient, type TicketBreadcrumb } from '@/components/tickets/TicketDirectoryClient'
 import { EVENT_TYPE_FILTERS } from '@/data/tickets-taxonomy'
@@ -55,17 +54,15 @@ export default async function TicketSearchPage({ searchParams }: SearchPageProps
     subtitle: description,
   }
 
-  return <AppLayoutShell>
-    <TicketDirectoryClient
-      title={title}
-      description={description}
-      breadcrumbs={breadcrumbs}
-      events={[]}
-      showFilters={true}
-      richContent={richContent}
-      defaultEventType={params.type || 'all'}
-      defaultCity={params.q}
-    />
-  </AppLayoutShell>
+  return <TicketDirectoryClient
+    title={title}
+    description={description}
+    breadcrumbs={breadcrumbs}
+    events={[]}
+    showFilters={true}
+    richContent={richContent}
+    defaultEventType={params.type || 'all'}
+    defaultCity={params.q}
+  />
 
 }

@@ -68,22 +68,10 @@ export default async function BookingSuccessPage({ params, searchParams }: { par
 
   const bookingDateRaw = (booking as any).createdAt || (booking as any).paidAt || new Date().toISOString()
 
+  // SIDEBAR-4: standalone EventSeats header stripped — /tickets/layout.tsx
+  // provides the Planviry AppLayoutShell (sidebar + global nav + SiteFooter).
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div>
-              <h1 className="text-xl font-semibold text-gray-900">Book Tickets</h1>
-              <p className="text-gray-600">Demo Theatre</p>
-            </div>
-            <nav>
-              <Link href="/" className="text-blue-600 hover:text-blue-500">← Back to Shows</Link>
-            </nav>
-          </div>
-        </div>
-      </header>
-
       {/* Step Indicator matching booking flow */}
       <div className="flex items-center justify-center mb-8 mt-6">
         <div className="flex items-center space-x-4">

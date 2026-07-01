@@ -103,29 +103,10 @@ export default function WhatsOnPage() {
     window.location.href = `/book/${showId}/${performanceId}`
   }
 
+  // SIDEBAR-4: standalone EventSeats header/footer stripped — /tickets/layout.tsx
+  // provides the Planviry AppLayoutShell (sidebar + global nav + SiteFooter).
   return (
     <div className="min-h-screen" style={{ backgroundColor: 'color-mix(in srgb, var(--highlight) 6%, white)' }}>
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b" style={{ borderColor: 'color-mix(in srgb, var(--highlight) 30%, #e5e7eb)' }}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-2xl font-bold text-primary">
-                {settings?.venue?.name || 'Demo Theatre'}
-              </h1>
-              <p className="text-gray-600">
-                {settings?.system?.tagline || 'Community Drama Group'}
-              </p>
-            </div>
-             <nav className="hidden md:flex space-x-8">
-              <a href="/whats-on" className="text-highlight font-medium hover:text-lowlight">What&apos;s On</a>
-              <a href="/admin" className="text-gray-600 hover:text-lowestlight">Admin</a>
-            </nav>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -149,61 +130,6 @@ export default function WhatsOnPage() {
           />
         )}
       </main>
-
-      {/* Footer */}
-      <footer className="bg-white border-t mt-16" style={{ borderColor: 'color-mix(in srgb, var(--highlight) 30%, #e5e7eb)' }}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {/* Venue Info */}
-            <div className="text-center md:text-left">
-              <h3 className="text-lg font-semibold text-primary mb-2">
-                {settings?.venue?.name || 'Demo Theatre'}
-              </h3>
-              {settings?.venue?.address && (
-                <p className="text-gray-600 text-sm mb-1">
-                  {settings.venue.address}
-                  {settings.venue.city && `, ${settings.venue.city}`}
-                  {settings.venue.postcode && `, ${settings.venue.postcode}`}
-                </p>
-              )}
-              {settings?.venue?.phone && (
-                <p className="text-gray-600 text-sm mb-1">
-                  📞 {settings.venue.phone}
-                </p>
-              )}
-              {settings?.venue?.email && (
-                <p className="text-gray-600 text-sm">
-                  ✉️ {settings.venue.email}
-                </p>
-              )}
-            </div>
-
-            {/* Quick Links */}
-            <div className="text-center">
-               <h3 className="text-lg font-semibold text-primary mb-2">Quick Links</h3>
-              <div className="space-y-1">
-                 <a href="/whats-on" className="block text-gray-600 text-sm hover:text-highlight">What&apos;s On</a>
-                <a href="/admin" className="block text-gray-600 text-sm hover:text-highlight">Admin</a>
-                {settings?.venue?.website && (
-                  <a href={settings.venue.website} target="_blank" rel="noopener noreferrer" className="block text-gray-600 text-sm hover:text-blue-600">
-                    Visit Website
-                  </a>
-                )}
-              </div>
-            </div>
-
-            {/* System Info */}
-            <div className="text-center md:text-right">
-              <p className="text-gray-600 text-sm">
-                &copy; {new Date().getFullYear()} {settings?.venue?.name || 'EventSeats'}. All rights reserved.
-              </p>
-              <p className="text-gray-500 text-xs mt-1">
-                Powered by <a href="https://hannahgoodridge.dev" className="text-highlight hover:text-lowlight">Hannah Goodridge</a>
-              </p>
-            </div>
-          </div>
-        </div>
-      </footer>
     </div>
   )
 }

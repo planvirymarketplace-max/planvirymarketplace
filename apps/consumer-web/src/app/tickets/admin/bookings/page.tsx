@@ -153,53 +153,18 @@ export default function AdminBookingsPage() {
     )
   }
 
+  // SIDEBAR-4: standalone EventSeats header + sub-nav stripped — /tickets/layout.tsx
+  // provides the Planviry AppLayoutShell (sidebar + global nav + SiteFooter).
+  // useSession auth logic + redirect to /admin/login left intact.
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Bookings Management</h1>
-              <p className="text-gray-700">Manage and track all booking orders</p>
-            </div>
-            <div className="flex items-center gap-4">
-              <Button
-                variant="outline"
-                onClick={() => router.push('/admin')}
-              >
-                ← Back to Dashboard
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Navigation */}
-      <nav className="bg-gray-100 border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex space-x-8">
-            <a href="/admin" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-700 hover:text-gray-800">
-              Dashboard
-            </a>
-            <a href="/admin/shows" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-700 hover:text-gray-800">
-              Shows
-            </a>
-            <a href="/admin/bookings" className="py-3 px-1 border-b-2 border-blue-500 text-sm font-medium text-blue-600">
-              Bookings
-            </a>
-            <a href="/admin/customers" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-700 hover:text-gray-800">
-              Customers
-            </a>
-            <a href="/admin/settings" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-700 hover:text-gray-800">
-              Settings
-            </a>
-          </div>
-        </div>
-      </nav>
-
       {/* Content */}
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">Bookings Management</h1>
+          <p className="text-gray-700">Manage and track all booking orders</p>
+        </div>
+
         {/* Filters */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Filter Bookings</h3>

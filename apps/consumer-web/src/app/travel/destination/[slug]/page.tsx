@@ -1,4 +1,3 @@
-import { AppLayoutShell } from '@/components/AppLayoutShell'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ChevronRight, MapPin, Info } from 'lucide-react'
@@ -188,7 +187,7 @@ export default async function DestinationPage({ params }: PageProps) {
   // If no properties for the city, show all properties (demo) so the page is useful
   const displayProperties = properties.length > 0 ? properties : []
 
-  return <AppLayoutShell>
+  return (
     <div className="bg-white min-h-screen">
       <TravelSearchResults
         searchParams={{}}
@@ -288,6 +287,6 @@ export default async function DestinationPage({ params }: PageProps) {
         </div>
       </section>
     </div>
-  </AppLayoutShell>
+  )
 
 }

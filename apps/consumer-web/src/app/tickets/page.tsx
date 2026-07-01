@@ -1,4 +1,3 @@
-import { AppLayoutShell } from '@/components/AppLayoutShell'
 import type { Metadata } from 'next'
 import { TICKETS_GROUPS, TICKETS_CITIES } from '@/data/tickets-taxonomy'
 import { UnifiedPageShell, type Breadcrumb, type Pill, type RelatedLink } from '@/components/UnifiedPageShell'
@@ -48,8 +47,7 @@ export default function TicketsLandingPage() {
     { name: 'Cities', slug: 'cities', href: '/tickets/cities', description: `${TICKETS_CITIES.length} US cities`, image: undefined, badge: 'CITIES' },
   ]
 
-  return <AppLayoutShell>
-    <UnifiedPageShell
+  return <UnifiedPageShell
       eyebrow="LIVE EVENT TICKETS"
       title="Tickets"
       subtitle="Concerts, sports, arts, theater, comedy, and family events — all in one place, all bookable together."
@@ -74,6 +72,5 @@ export default function TicketsLandingPage() {
         ))}
       </UnifiedGrid>
     </UnifiedPageShell>
-  </AppLayoutShell>
 
 }

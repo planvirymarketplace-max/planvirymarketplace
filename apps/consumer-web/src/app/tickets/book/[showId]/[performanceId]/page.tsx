@@ -274,25 +274,12 @@ export default function BookingRoute() {
     )
   }
 
+  // SIDEBAR-4: standalone EventSeats header stripped — /tickets/layout.tsx
+  // provides the Planviry AppLayoutShell (sidebar + global nav + SiteFooter).
+  // Loading/error/not-found returns above intentionally keep their centered
+  // spinner/message layout; the shell wraps them so the sidebar still shows.
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div>
-              <h1 className="text-xl font-semibold text-gray-900">Book Tickets</h1>
-              <p className="text-gray-600">Demo Theatre</p>
-            </div>
-            <nav>
-              <a href="/" className="text-blue-600 hover:text-blue-500">
-                ← Back to Shows
-              </a>
-            </nav>
-          </div>
-        </div>
-      </header>
-
       <Banner />
 
       {/* Main Content */}

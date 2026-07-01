@@ -165,58 +165,11 @@ export default function AdminPage() {
     return null // Redirecting...
   }
 
+  // SIDEBAR-4: standalone EventSeats header + sub-nav stripped — /tickets/layout.tsx
+  // provides the Planviry AppLayoutShell (sidebar + global nav + SiteFooter).
+  // useSession auth logic + redirect to /admin/login left intact.
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div className="flex items-center">
-              <h1 className="text-xl font-semibold text-gray-900">Admin Dashboard</h1>
-              {session?.user?.organization && (
-                <span className="ml-4 px-3 py-1 bg-emerald-100 text-emerald-800 text-sm rounded-full">
-                  {session.user.organization.name}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-600">
-                Welcome, {session?.user?.name || session?.user?.email}
-              </span>
-              <Button
-                variant="outline"
-                onClick={handleSignOut}
-              >
-                Sign Out
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Navigation */}
-      <nav className="bg-gray-100 border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex space-x-8">
-            <a href="/admin" className="py-3 px-1 border-b-2 border-highlight text-sm font-medium text-highlight">
-              Dashboard
-            </a>
-            <a href="/admin/shows" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700">
-              Shows
-            </a>
-            <a href="/admin/bookings" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700">
-              Bookings
-            </a>
-            <a href="/admin/customers" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700">
-              Customers
-            </a>
-            <a href="/admin/settings" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700">
-              Settings
-            </a>
-          </div>
-        </div>
-      </nav>
-
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <AdminDashboard

@@ -1,4 +1,3 @@
-import { AppLayoutShell } from '@/components/AppLayoutShell'
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import {
@@ -76,18 +75,16 @@ export default async function TicketSubcategoryPage({ params }: PageProps) {
     family: 'family',
   }
 
-  return <AppLayoutShell>
-    <TicketDirectoryClient
-      title={`${sub.name} Tickets`}
-      description={`Find and buy tickets for upcoming ${sub.name.toLowerCase()} events. Browse live events across the United States.`}
-      breadcrumbs={breadcrumbs}
-      events={[]}
-      categoryCards={categoryCards}
-      cardsTitle={`More in ${groupData.name}`}
-      showFilters={false}
-      richContent={getSubcategoryContent(groupData.slug, sub.slug, sub.name)}
-      defaultEventType={eventTypeMap[groupData.slug] || 'all'}
-    />
-  </AppLayoutShell>
+  return <TicketDirectoryClient
+    title={`${sub.name} Tickets`}
+    description={`Find and buy tickets for upcoming ${sub.name.toLowerCase()} events. Browse live events across the United States.`}
+    breadcrumbs={breadcrumbs}
+    events={[]}
+    categoryCards={categoryCards}
+    cardsTitle={`More in ${groupData.name}`}
+    showFilters={false}
+    richContent={getSubcategoryContent(groupData.slug, sub.slug, sub.name)}
+    defaultEventType={eventTypeMap[groupData.slug] || 'all'}
+  />
 
 }

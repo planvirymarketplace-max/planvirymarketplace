@@ -285,47 +285,21 @@ export default function AdminShowsPage() {
     )
   }
 
+  // SIDEBAR-4: standalone EventSeats header + sub-nav stripped — /tickets/layout.tsx
+  // provides the Planviry AppLayoutShell (sidebar + global nav + SiteFooter).
+  // The "Add New Show" action button is preserved as an inline toolbar above
+  // the table so admin functionality is not lost with the header chrome.
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div className="flex items-center">
-              <h1 className="text-xl font-semibold text-gray-900">Shows Management</h1>
-            </div>
-            <Button variant="primary" onClick={handleNewShow}>
-              Add New Show
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      {/* Navigation */}
-      <nav className="bg-gray-100 border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex space-x-8">
-            <a href="/admin" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700">
-              Dashboard
-            </a>
-            <a href="/admin/shows" className="py-3 px-1 border-b-2 border-blue-500 text-sm font-medium text-blue-600">
-              Shows
-            </a>
-            <a href="/admin/bookings" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700">
-              Bookings
-            </a>
-            <a href="/admin/customers" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700">
-              Customers
-            </a>
-            <a href="/admin/settings" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700">
-              Settings
-            </a>
-          </div>
-        </div>
-      </nav>
-
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-xl font-semibold text-gray-900">Shows Management</h1>
+          <Button variant="primary" onClick={handleNewShow}>
+            Add New Show
+          </Button>
+        </div>
+
         <div className="bg-white shadow rounded-lg">
           <div className="px-6 py-4 border-b border-gray-200">
             <h2 className="text-lg font-medium text-gray-900">All Shows</h2>

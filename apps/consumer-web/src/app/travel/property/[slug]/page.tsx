@@ -1,4 +1,3 @@
-import { AppLayoutShell } from '@/components/AppLayoutShell'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import {
@@ -580,13 +579,12 @@ function Section({
   title: string
   children: React.ReactNode
 }) {
-  return <AppLayoutShell>
+  return (
     <section>
       <h2 className="text-[10.5px] font-black text-gray-900 uppercase tracking-widest mb-3">
         {title}
       </h2>
       {children}
     </section>
-  </AppLayoutShell>
-
+  )
 }

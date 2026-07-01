@@ -291,60 +291,31 @@ export default function AdminSettingsPage() {
     )
   }
 
+  // SIDEBAR-4: standalone EventSeats header + sub-nav stripped — /tickets/layout.tsx
+  // provides the Planviry AppLayoutShell (sidebar + global nav + SiteFooter).
+  // useSession auth logic + redirect to /admin/login left intact.
+  // The "Save All Settings" action button is preserved as an inline toolbar
+  // above the tabs so admin functionality is not lost with the header chrome.
+  // The tab <aside> (Venue/Booking/System/etc.) is page CONTENT, not chrome —
+  // kept intact.
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">System Settings</h1>
-              <p className="text-gray-700">Configure your booking system</p>
-            </div>
-            <div className="flex items-center gap-4">
-              <Button
-                variant="primary"
-                onClick={handleSaveSettings}
-                disabled={isSaving}
-              >
-                {isSaving ? 'Saving...' : 'Save All Settings'}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => router.push('/admin')}
-              >
-                ← Back to Dashboard
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Navigation */}
-      <nav className="bg-gray-100 border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex space-x-8">
-            <a href="/admin" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-700 hover:text-gray-800">
-              Dashboard
-            </a>
-            <a href="/admin/shows" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-700 hover:text-gray-800">
-              Shows
-            </a>
-            <a href="/admin/bookings" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-700 hover:text-gray-800">
-              Bookings
-            </a>
-            <a href="/admin/customers" className="py-3 px-1 border-b-2 border-transparent text-sm font-medium text-gray-700 hover:text-gray-800">
-              Customers
-            </a>
-            <a href="/admin/settings" className="py-3 px-1 border-b-2 border-highlight text-sm font-medium text-highlight">
-              Settings
-            </a>
-          </div>
-        </div>
-      </nav>
-
       {/* Content */}
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">System Settings</h1>
+            <p className="text-gray-700">Configure your booking system</p>
+          </div>
+          <Button
+            variant="primary"
+            onClick={handleSaveSettings}
+            disabled={isSaving}
+          >
+            {isSaving ? 'Saving...' : 'Save All Settings'}
+          </Button>
+        </div>
+
         <div className="lg:grid lg:grid-cols-12 lg:gap-x-5">
           {/* Sidebar */}
           <aside className="py-6 px-2 sm:px-6 lg:py-0 lg:px-0 lg:col-span-3">

@@ -41,35 +41,40 @@ export function GatedSurfacePage({
   // The actual Supabase query lives in <SurfaceLiveInventory />.
   // const liveInventoryCategories = inventoryCategories ?? (inventoryCategory ? [inventoryCategory] : [])
 
+  // ─── Sidebar is the orchestration ───────────────────────────────────
+  // Every return path MUST wrap in <AppLayout> so the sidebar persists.
+  // Previously only the "both what+where set" branch wrapped — default
+  // visits to /services, /things-to-do, etc. lost the sidebar entirely.
+
   // Intent gate: if both missing, show 2-column gate
   if (!what && !where) {
     return (
-      <>
+      <AppLayout>
         <IntentGate surface={surface} missing="both" />
         {/* P4-1/4-2: still surface the live inventory + subcategory pills so
             the page has real content even before the user enters intent. */}
         <SurfaceLiveInventory surface={surface} />
-      </>
+      </AppLayout>
     )
   }
 
   // If what set but where missing
   if (what && !where) {
     return (
-      <>
+      <AppLayout>
         <IntentGate surface={surface} missing="where" existingWhat={what} />
         <SurfaceLiveInventory surface={surface} />
-      </>
+      </AppLayout>
     )
   }
 
   // If where set but what missing
   if (!what && where) {
     return (
-      <>
+      <AppLayout>
         <IntentGate surface={surface} missing="what" existingWhere={where} />
         <SurfaceLiveInventory surface={surface} />
-      </>
+      </AppLayout>
     )
   }
 
