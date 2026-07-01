@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
-import { supabase } from '@/lib/supabase/admin'
+import { createAdminClient } from '@/lib/supabase/admin'
+const supabase = createAdminClient()
 import { auth } from '@/lib/eventseats/auth'
 
 export async function POST(request: NextRequest) {

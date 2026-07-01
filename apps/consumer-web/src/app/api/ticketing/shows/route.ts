@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase/admin'
+import { createAdminClient } from '@/lib/supabase/admin'
+const supabase = createAdminClient()
 import { randomUUID } from 'crypto'
 
 interface CreateShowRequest {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSupabase } from '@/lib/supabase/admin'
+import { createAdminClient } from '@/lib/supabase/admin'
+const getServerSupabase = () => createAdminClient()
 import { randomUUID } from 'crypto'
 import { getStripe } from '@/lib/eventseats/stripe'
 import { calculateTotalMinor, ensureCustomer } from '@/lib/eventseats/bookings'

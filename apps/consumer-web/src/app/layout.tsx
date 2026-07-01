@@ -4,6 +4,7 @@ import { ThemeProvider } from "next-themes";
 import { CartProvider } from "@/lib/cart-context";
 import { AppProvider } from "@/context/AppContext";
 import { LocationProvider } from "@/components/providers/LocationProvider";
+import { QueryProvider } from "@/components/providers/query-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -34,16 +35,18 @@ export default function RootLayout({
       </head>
       <body className="antialiased overflow-x-hidden">
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
-          <LocationProvider>
-            <CartProvider>
-              <AppProvider>
-                <div className="min-h-screen flex flex-col">
-                  <main className="flex-1">{children}</main>
-                </div>
-                <Toaster />
-              </AppProvider>
-            </CartProvider>
-          </LocationProvider>
+          <QueryProvider>
+            <LocationProvider>
+              <CartProvider>
+                <AppProvider>
+                  <div className="min-h-screen flex flex-col">
+                    <main className="flex-1">{children}</main>
+                  </div>
+                  <Toaster />
+                </AppProvider>
+              </CartProvider>
+            </LocationProvider>
+          </QueryProvider>
         </ThemeProvider>
       </body>
     </html>

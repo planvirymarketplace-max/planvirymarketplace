@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
-import { getServerSupabase } from '@/lib/supabase/admin'
+import { createAdminClient } from '@/lib/supabase/admin'
+const getServerSupabase = () => createAdminClient()
 
 export const runtime = 'nodejs'
 
