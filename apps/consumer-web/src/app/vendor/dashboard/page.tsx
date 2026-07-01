@@ -12,6 +12,34 @@ export default function VendorDashboardPage() {
   const [loading, setLoading] = useState(true)
   const [vendor, setVendor] = useState<any>(null)
   const [stats, setStats] = useState({ listings: 0, reservations: 0, revenue: 0, checkIns: 0 })
+  const [stripeLoading, setStripeLoading] = useState(false)
+  const [stripeError, setStripeError] = useState('')
+
+  const handleStripeConnect = async () => {
+    setStripeError('')
+    setStripeLoading(true)
+    try {
+      const res = await fetch('/api/stripe-connect/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setStripeError(data?.error?.message || data?.error || 'Failed to start Stripe onboarding')
+        return
+      }
+      const url = data?.onboarding_url || data?.data?.onboarding_url
+      if (url) {
+        window.location.href = url
+      } else {
+        setStripeError('No onboarding URL returned from Stripe')
+      }
+    } catch (err) {
+      setStripeError(err instanceof Error ? err.message : 'Network error')
+    } finally {
+      setStripeLoading(false)
+    }
+  }
 
   useEffect(() => {
     const load = async () => {
@@ -98,19 +126,31 @@ export default function VendorDashboardPage() {
           {!vendor?.stripe_connect_account_id && (
             <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6">
               <p className="text-sm font-bold text-orange-800 mb-2">Set up payments to receive payouts</p>
-              <a href="/api/stripe-connect/onboarding" className="inline-block text-sm font-bold text-white bg-black px-4 py-2 rounded-lg hover:bg-gray-800">
-                Connect Stripe
-              </a>
+              {stripeError && <p className="text-sm text-red-600 mb-2">{stripeError}</p>}
+              <button
+                onClick={handleStripeConnect}
+                disabled={stripeLoading}
+                className="inline-flex items-center gap-2 text-sm font-bold text-white bg-black px-4 py-2 rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {stripeLoading ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    Connecting…
+                  </>
+                ) : (
+                  'Connect Stripe'
+                )}
+              </button>
             </div>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Link href="/hosting/create" className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow">
+            <Link href="/vendor/create-listing" className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow">
               <Store className="w-6 h-6 text-gray-400 mb-2" />
               <p className="font-bold text-black">Create Listing</p>
               <p className="text-sm text-gray-400">Add a new property, event, or service</p>
             </Link>
-            <Link href="/hosting/listings" className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow">
+            <Link href="/vendor/listings" className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow">
               <Home className="w-6 h-6 text-gray-400 mb-2" />
               <p className="font-bold text-black">Manage Listings</p>
               <p className="text-sm text-gray-400">Edit, pause, or archive your listings</p>

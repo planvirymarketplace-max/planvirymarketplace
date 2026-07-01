@@ -19,6 +19,8 @@ export default function VendorOnboardingPage() {
   const [vendorEmail, setVendorEmail] = useState('')
   const [vendorPhone, setVendorPhone] = useState('')
   const [vendorCity, setVendorCity] = useState('')
+  const [locations, setLocations] = useState<Array<{ id: string; name: string; region: string | null }>>([])
+  const [locationId, setLocationId] = useState<string>('')
   const [creating, setCreating] = useState(false)
   const [done, setDone] = useState(false)
 
@@ -34,6 +36,17 @@ export default function VendorOnboardingPage() {
         .eq('status', 'ACTIVE')
         .maybeSingle()
       if (staff) setExistingVendor(staff)
+
+      // Load locations for the picker (used in 'create' mode).
+      const { data: locs } = await supabase
+        .from('locations')
+        .select('id, name, region')
+        .order('name')
+      if (locs) {
+        setLocations(locs)
+        if (locs.length > 0) setLocationId(locs[0].id)
+      }
+
       setLoading(false)
     }
     load()
@@ -67,10 +80,40 @@ export default function VendorOnboardingPage() {
 
   const handleCreate = async () => {
     setCreating(true)
+    setClaimError('')
+    if (!locationId) {
+      setCreating(false)
+      setClaimError('Please select a location')
+      return
+    }
     const slug = vendorName.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Math.random().toString(36).slice(2, 6)
+
+    // Resolve the selected location so we can stamp it onto the vendor's address.
+    const selectedLocation = locations.find(l => l.id === locationId)
+    const addressLine = selectedLocation
+      ? `${vendorCity ? vendorCity + ', ' : ''}${selectedLocation.name}${selectedLocation.region ? ', ' + selectedLocation.region : ''}`.trim()
+      : vendorCity
+
     const { data, error } = await supabase
       .from('vendor_accounts')
-      .insert({ name: vendorName, slug, email: vendorEmail, phone: vendorPhone, status: 'CLAIMED', claimed_at: new Date().toISOString() })
+      .insert({
+        name: vendorName,
+        slug,
+        email: vendorEmail,
+        phone: vendorPhone,
+        address: addressLine || null,
+        location_id: locationId,
+        status: 'CLAIMED',
+        claimed_at: new Date().toISOString(),
+        // Store the linked location in metadata so it survives even if the FK
+        // relationship changes later (BR: vendor_accounts.metadata is JSONB).
+        metadata: {
+          location_id: locationId,
+          location_name: selectedLocation?.name ?? null,
+          location_region: selectedLocation?.region ?? null,
+          onboarding_source: 'self_serve_create',
+        },
+      })
       .select('id')
       .single()
     if (error) { setCreating(false); setClaimError(error.message); return }
@@ -176,7 +219,28 @@ export default function VendorOnboardingPage() {
                     <label className="text-sm font-bold text-gray-700 block mb-1">City</label>
                     <input type="text" value={vendorCity} onChange={e => setVendorCity(e.target.value)} placeholder="Austin, TX" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
                   </div>
-                  <button onClick={handleCreate} disabled={creating || !vendorName || !vendorEmail} className="w-full bg-black text-white font-bold py-3 rounded-lg hover:bg-gray-800 disabled:opacity-50 flex items-center justify-center gap-2">
+                  <div>
+                    <label className="text-sm font-bold text-gray-700 block mb-1">
+                      Location <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={locationId}
+                      onChange={e => setLocationId(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                      required
+                    >
+                      {locations.length === 0 && <option value="">No locations available</option>}
+                      {locations.map(loc => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.name}{loc.region ? `, ${loc.region}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Links your business to a region in the <span className="font-mono">locations</span> table. Also written to your address.
+                    </p>
+                  </div>
+                  <button onClick={handleCreate} disabled={creating || !vendorName || !vendorEmail || !locationId} className="w-full bg-black text-white font-bold py-3 rounded-lg hover:bg-gray-800 disabled:opacity-50 flex items-center justify-center gap-2">
                     {creating ? 'Creating...' : <>Create & Continue <ArrowRight className="w-4 h-4" /></>}
                   </button>
                   <button onClick={() => setMode('choose')} className="w-full text-sm text-gray-400 hover:text-black">← Back</button>
