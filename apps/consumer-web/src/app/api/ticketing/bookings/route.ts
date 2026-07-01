@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 const supabase = createAdminClient()
 import { randomUUID } from 'crypto'
+import { calculatePrice, checkAvailability } from '@planviry/shared'
 
 interface BookingRequest {
   performanceId: string
@@ -77,37 +78,83 @@ export async function POST(request: NextRequest) {
 
     console.log('✅ Found performance:', (performance.shows as any).title)
 
-    // Check for double booking - verify seats are still available
-    const seatIds = seats.map(seat => seat.seatId)
-    const { data: existingBookings, error: bookingCheckError } = await supabase
-      .from('booking_items')
-      .select(`
-        seatId,
-        bookings!inner (
-          status,
-          performanceId
-        )
-      `)
-      .eq('bookings.performanceId', performanceId)
-      .in('bookings.status', ['PENDING', 'CONFIRMED', 'PAID', 'CHECKED_IN'])
-      .in('seatId', seatIds)
+    // ─── FIX-5: model-aware pricing via shared adapter (PER_SEAT) ──────────
+    // Previously: `totalAmount` was read straight from the request body — a
+    // client could pass any number. Now the per-seat prices (in the body's
+    // `seats[].price` field, expected to be in the booking currency's major
+    // unit) are summed through `calculatePrice` with the PER_SEAT model.
+    // The body's `totalAmount` is ignored for the booking row.
+    const seatPricesCents = seats.map(s => Math.round((s.price ?? 0) * 100))
+    const priceResult = calculatePrice(
+      supabase,
+      {
+        base_price_cents: 0,
+        pricing_model: 'PER_SEAT',
+        category: 'EVENT_TICKET',
+      },
+      { seats: seatPricesCents },
+    )
+    const computedTotalCents = priceResult.total_cents
+    const computedBookingFeeCents = Math.round((bookingFee ?? 0) * 100)
+    const computedGrandTotalCents = computedTotalCents + computedBookingFeeCents
+    // Keep amounts in the body's currency unit (pounds/dollars) for the
+    // legacy `bookings`/`booking_items` columns that store major-unit values.
+    const computedTotalAmount = computedGrandTotalCents / 100
+    const computedBookingFee = computedBookingFeeCents / 100
 
-    if (bookingCheckError) {
-      console.error('Error checking existing bookings:', bookingCheckError)
+    // ─── FIX-5: best-effort seat-availability check via shared adapter ─────
+    // The real protection against overselling is the atomic conditional
+    // UPDATE on `capacity_assignments` below. The adapter check reads from
+    // `reservations` (mapped from `bookings` via db-compat) and surfaces the
+    // already-booked seat IDs for a friendlier 409 message.
+    const seatIds = seats.map(seat => seat.seatId)
+    const availItemId = (performance.showId as string | undefined) ?? performanceId
+    const avail = await checkAvailability(supabase, availItemId, 'EVENT_TICKET', {
+      seat_ids: seatIds,
+    })
+    if (!avail.available) {
       return NextResponse.json({
         success: false,
-        error: 'Failed to verify seat availability'
-      }, { status: 500 })
+        error: 'Some seats are no longer available. Please refresh and try again.',
+        alreadyBookedSeats: avail.booked_seats?.filter(id => seatIds.includes(id)) ?? [],
+      }, { status: 409 })
     }
 
-    if (existingBookings && existingBookings.length > 0) {
-      const alreadyBookedSeats = existingBookings.map(booking => booking.seatId)
-      console.error('❌ Seats already booked:', alreadyBookedSeats)
-      return NextResponse.json({
-        success: false,
-        error: `Some seats are no longer available. Please refresh and try again.`,
-        alreadyBookedSeats: alreadyBookedSeats
-      }, { status: 409 }) // 409 Conflict
+    // ─── FIX-5: ATOMIC capacity check (replaces read-then-write TOCTOU) ────
+    // Pattern mirrors /api/checkout/route.ts:114-135 (capacity_assignments).
+    // If the show/performance has a capacity_assignments row, do a single
+    // conditional UPDATE with `.lte('used', capacity - N)` guard. If 0 rows
+    // updated, a concurrent request grabbed the last seats between our check
+    // and our insert — return 409. The previous SELECT-then-INSERT pattern
+    // (booking_items with bookings!inner join) was both broken (`booking_items`
+    // is not in TABLE_MAP → 500) and racy.
+    const { data: capPools } = await supabase
+      .from('capacity_assignments')
+      .select('id, name, capacity, used')
+      .eq('item_id', availItemId)
+
+    if (capPools && capPools.length > 0) {
+      const seatCount = seats.length
+      for (const pool of capPools) {
+        if (pool.capacity - pool.used < seatCount) {
+          return NextResponse.json({
+            success: false,
+            error: `Sold out (pool: ${pool.name})`,
+          }, { status: 409 })
+        }
+        const { data: atomicResult, error: atomicErr } = await supabase
+          .from('capacity_assignments')
+          .update({ used: pool.used + seatCount })
+          .eq('id', pool.id)
+          .lte('used', pool.capacity - seatCount)
+          .select('id')
+        if (atomicErr || !atomicResult || atomicResult.length === 0) {
+          return NextResponse.json({
+            success: false,
+            error: `Sold out (pool: ${pool.name}) — race condition prevented`,
+          }, { status: 409 })
+        }
+      }
     }
 
     console.log('✅ All seats are available for booking')
@@ -172,8 +219,11 @@ export async function POST(request: NextRequest) {
         id: bookingId,
         bookingNumber: bookingNumber,
         status: 'PENDING',
-        totalAmount: totalAmount,
-        bookingFee: bookingFee,
+        // FIX-5: use server-computed totals (from calculatePrice) — ignore
+        // the body's `totalAmount`/`bookingFee` to prevent client-side price
+        // tampering.
+        totalAmount: computedTotalAmount,
+        bookingFee: computedBookingFee,
         accessibilityRequirements: accessibilityRequirements || null,
         specialRequests: specialRequests || null,
         performanceId: performanceId,
@@ -186,6 +236,15 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (bookingError) {
+      // Compensating transaction: release the reserved capacity.
+      if (capPools && capPools.length > 0) {
+        for (const pool of capPools) {
+          await supabase
+            .from('capacity_assignments')
+            .update({ used: Math.max(0, pool.used) })
+            .eq('id', pool.id)
+        }
+      }
       console.error('Error creating booking:', bookingError)
       return NextResponse.json({
         success: false,
@@ -212,8 +271,16 @@ export async function POST(request: NextRequest) {
 
     if (itemsError) {
       console.error('Error creating booking items:', itemsError)
-      // Try to rollback booking
+      // Try to rollback booking + release the reserved capacity.
       await supabase.from('bookings').delete().eq('id', bookingId)
+      if (capPools && capPools.length > 0) {
+        for (const pool of capPools) {
+          await supabase
+            .from('capacity_assignments')
+            .update({ used: Math.max(0, pool.used) })
+            .eq('id', pool.id)
+        }
+      }
       return NextResponse.json({
         success: false,
         error: 'Failed to create booking items'

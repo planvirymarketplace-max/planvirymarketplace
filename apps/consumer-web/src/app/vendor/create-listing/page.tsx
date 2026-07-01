@@ -52,7 +52,7 @@ const CHOICES: Choice[] = [
     title: 'List a service',
     description: 'Pro vendors — DJs, photographers, florists, planners — with a flat service fee.',
     icon: Briefcase,
-    category: 'VENDOR_SERVICE',
+    category: 'SERVICE',
   },
   {
     href: '/vendor/create-listing/dining',

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { calculatePrice } from '@planviry/shared'
 import Stripe from 'stripe'
 
 // POST /api/tickets/purchase
@@ -95,7 +96,21 @@ export async function POST(request: NextRequest) {
   }
 
   // ─── 3. Create PENDING reservation ─────────────────────────────────────
-  const totalPriceCents = tier.price_cents * quantity
+  // FIX-5: use the shared pricing adapter (PER_SEAT model) instead of
+  // `tier.price_cents * quantity`. For general-admission tiers where each
+  // seat is the same price, the adapter sums `quantity` seats at the tier's
+  // price_cents — equivalent to the prior math, but routed through the
+  // adapter so future per-seat pricing changes are centralised.
+  const priceResult = calculatePrice(
+    supabase,
+    {
+      base_price_cents: tier.price_cents,
+      pricing_model: 'PER_SEAT',
+      category: 'EVENT_TICKET',
+    },
+    { quantity },
+  )
+  const totalPriceCents = priceResult.total_cents
   const ttlExpiresAt = new Date(Date.now() + RESERVATION_TTL_MINUTES * 60_000).toISOString()
 
   const { data: reservation, error: resErr } = await supabase

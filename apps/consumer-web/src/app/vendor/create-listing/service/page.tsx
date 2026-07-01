@@ -57,7 +57,7 @@ export default function CreateServicePage() {
       }
       const { data: staff, error: staffErr } = await supabase
         .from('vendor_staff')
-        .select('vendor_id, vendor_accounts!inner(name, location_id)')
+        .select('vendor_id, vendor_accounts!inner(name)')
         .eq('user_id', user.id)
         .eq('status', 'ACTIVE')
         .maybeSingle()
@@ -108,7 +108,7 @@ export default function CreateServicePage() {
           title: title.trim(),
           slug,
           description: description.trim() || null,
-          category: 'VENDOR_SERVICE',
+          category: 'SERVICE',
           base_price_cents: basePriceCents,
           currency: 'USD',
           status: 'DRAFT',
@@ -132,7 +132,7 @@ export default function CreateServicePage() {
           event_type: 'inventory.created',
           entity_type: 'inventory_item',
           entity_id: data.id,
-          payload: { vendor_id: vendorId, category: 'VENDOR_SERVICE', status: 'DRAFT' },
+          payload: { vendor_id: vendorId, category: 'SERVICE', status: 'DRAFT' },
         })
         .then(() => undefined, () => undefined)
 
@@ -169,7 +169,7 @@ export default function CreateServicePage() {
             </div>
             <div>
               <h1 className="text-2xl font-black text-black leading-none">List a Service</h1>
-              <p className="text-xs text-gray-400 mt-1">Category: VENDOR_SERVICE</p>
+              <p className="text-xs text-gray-400 mt-1">Category: SERVICE</p>
             </div>
           </div>
           {vendorName && (

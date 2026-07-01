@@ -14,7 +14,9 @@
     "./dates": "./dates.ts",
     "./rbac": "./rbac.ts",
     "./rbac-client": "./rbac-client.ts",
-    "./slots": "./slots.ts"
+    "./slots": "./slots.ts",
+    "./pricing-adapter": "./pricing-adapter.ts",
+    "./availability-adapter": "./availability-adapter.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

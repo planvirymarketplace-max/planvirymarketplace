@@ -28,6 +28,7 @@ import {
   getClientIp,
   RATE_LIMITS,
 } from "@/lib/api/rate-limit"
+import { calculatePrice, pricingModelForCategory, type PricingModel } from "@planviry/shared"
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest) {
     // ─── Verify inventory item is PUBLISHED ───────────────────────────────────
     const { data: item } = await admin
       .from("inventory_items")
-      .select("id, vendor_id, base_price_cents, currency, status, max_quantity_per_booking")
+      .select("id, vendor_id, base_price_cents, currency, status, max_quantity_per_booking, category, metadata")
       .eq("id", parsed.item_id)
       .maybeSingle()
     if (!item) throw new NotFoundError("Inventory item not found")
@@ -68,8 +69,25 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const unitPriceCents =
-      parsed.unit_price_cents ?? (item.base_price_cents as number) ?? 0
+    // ─── FIX-5: model-aware per-unit + total pricing via shared adapter ────
+    // Previously: `parsed.unit_price_cents ?? item.base_price_cents ?? 0`.
+    // Now: resolve the authoritative unit price through `calculatePrice` so
+    // metadata.pricing_model is honoured. We compute the per-unit price with
+    // quantity=1, then multiply by the requested quantity for the line total
+    // (preserving the prior flat-multiply behaviour for FLAT items).
+    const metadata = (item.metadata ?? {}) as { pricing_model?: PricingModel }
+    const category = (item.category as string | null) ?? undefined
+    const pricingModel = metadata.pricing_model ?? pricingModelForCategory(category ?? "")
+    const unitPriceResult = calculatePrice(
+      admin,
+      {
+        base_price_cents: parsed.unit_price_cents ?? ((item.base_price_cents as number) ?? 0),
+        pricing_model: pricingModel,
+        category,
+      },
+      { quantity: 1 },
+    )
+    const unitPriceCents = unitPriceResult.total_cents
     const totalPriceCents = unitPriceCents * parsed.quantity
 
     // ─── Find or create ACTIVE cart ───────────────────────────────────────────

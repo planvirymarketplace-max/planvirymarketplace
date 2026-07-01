@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { calculatePrice, pricingModelForCategory, type PricingModel } from '@planviry/shared'
 
 // POST /api/waitlist/[id]/accept — accept offer (creates reservation, marks CONVERTED)
 // Uses REAL TABLE: waitlist_entries (converted_reservation_id field)
@@ -34,14 +35,32 @@ export async function POST(
   // Load item for vendor_id + price
   const { data: item } = await supabase
     .from('inventory_items')
-    .select('id, vendor_id, base_price_cents, currency')
+    .select('id, vendor_id, base_price_cents, currency, category, metadata')
     .eq('id', entry.item_id)
     .maybeSingle()
 
   if (!item) return NextResponse.json({ error: 'Item not found' }, { status: 404 })
 
   // Create PENDING reservation
-  const totalPriceCents = (item.base_price_cents ?? 0) * entry.quantity
+  // ─── FIX-5: model-aware pricing via shared adapter ──────────────────────
+  // Previously: `(item.base_price_cents ?? 0) * entry.quantity` — flat
+  // multiply that ignored pricing_model. Now routed through `calculatePrice`
+  // so PER_PERSON / PER_SEAT / PER_SLOT / NIGHTLY / HOURLY items are priced
+  // correctly when a waitlist offer is accepted.
+  const metadata = (item.metadata ?? {}) as { pricing_model?: PricingModel }
+  const category = (item.category as string | null) ?? undefined
+  const pricingModel = metadata.pricing_model ?? pricingModelForCategory(category ?? "")
+  const priceResult = calculatePrice(
+    supabase,
+    {
+      base_price_cents: (item.base_price_cents ?? 0) as number,
+      pricing_model: pricingModel,
+      category,
+    },
+    { quantity: entry.quantity },
+  )
+  const totalPriceCents = priceResult.total_cents
+  const unitPriceCents = Math.round(priceResult.subtotal_cents / Math.max(1, entry.quantity))
   const { data: reservation, error: resErr } = await supabase
     .from('reservations')
     .insert({
@@ -50,7 +69,7 @@ export async function POST(
       vendor_id: item.vendor_id,
       status: 'PENDING',
       quantity: entry.quantity,
-      unit_price_cents: item.base_price_cents,
+      unit_price_cents: unitPriceCents,
       total_price_cents: totalPriceCents,
       currency: item.currency ?? 'USD',
       ttl_expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),

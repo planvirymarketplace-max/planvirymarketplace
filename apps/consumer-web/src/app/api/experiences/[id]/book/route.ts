@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { calculatePrice, checkAvailability } from '@planviry/shared'
 
 // POST /api/experiences/[id]/book
 // Lock slot, check capacity, create reservation (Part 44.2)
@@ -34,7 +35,21 @@ export async function POST(
     return NextResponse.json({ error: 'Slot not found' }, { status: 404 })
   }
 
-  // Step 2: Check availability
+  // FIX-5: best-effort availability check via the shared adapter. The real
+  // protection against overselling is the atomic conditional UPDATE below.
+  // FIX-10: category aligned to the live Supabase `inventory_category` enum
+  // (ACTIVITY — was EXPERIENCE).
+  if (slot.slot_date) {
+    const avail = await checkAvailability(supabase, experienceId, 'ACTIVITY', {
+      start_date: slot.slot_date,
+      time_slot: slot.slot_time ?? undefined,
+    })
+    if (!avail.available) {
+      return NextResponse.json({ error: avail.reason ?? 'Slot unavailable' }, { status: 409 })
+    }
+  }
+
+  // Step 2: Pre-flight capacity check (user-facing message — not the race-safe guard)
   if (slot.booked_count + party_size > slot.capacity) {
     return NextResponse.json({
       error: 'Slot full',
@@ -43,14 +58,24 @@ export async function POST(
     }, { status: 409 })
   }
 
-  // Step 3: Atomic increment
-  const { error: incrementError } = await supabase
+  // ─── FIX-5: ATOMIC capacity increment (replaces TOCTOU read-then-write) ──
+  // Pattern mirrors /api/checkout/route.ts:114-135 (capacity_assignments):
+  // single conditional UPDATE with `.lte('booked_count', capacity - N)` guard,
+  // then check the returned row count. If 0 rows updated, a concurrent request
+  // grabbed the last seats between our read and our write — return 409.
+  const { data: atomicResult, error: atomicErr } = await supabase
     .from('experience_slots')
     .update({ booked_count: slot.booked_count + party_size })
     .eq('id', slot_id)
+    .lte('booked_count', slot.capacity - party_size)
+    .select('id')
 
-  if (incrementError) {
-    return NextResponse.json({ error: 'Failed to reserve slot' }, { status: 500 })
+  if (atomicErr || !atomicResult || atomicResult.length === 0) {
+    return NextResponse.json({
+      error: 'Slot full — race condition prevented',
+      slot_full: true,
+      remaining: slot.capacity - slot.booked_count,
+    }, { status: 409 })
   }
 
   // Step 4: Get experience pricing
@@ -61,10 +86,31 @@ export async function POST(
     .single()
 
   if (!experience) {
+    // Compensating transaction: decrement booked_count
+    await supabase
+      .from('experience_slots')
+      .update({ booked_count: slot.booked_count })
+      .eq('id', slot_id)
     return NextResponse.json({ error: 'Experience not found' }, { status: 404 })
   }
 
-  const totalAmount = experience.base_price_per_person * party_size
+  // ─── FIX-5: model-aware pricing via shared adapter (PER_PERSON) ──────────
+  // Previously: `experience.base_price_per_person * party_size` (inline).
+  // Now: routed through `calculatePrice` so future pricing-model changes
+  // (e.g. flat-rate experiences, PER_SLOT) are centralised. The deposit math
+  // that runs AFTER per-item pricing is preserved verbatim.
+  // FIX-10: category aligned to the live Supabase `inventory_category` enum
+  // (ACTIVITY — was EXPERIENCE).
+  const priceResult = calculatePrice(
+    supabase,
+    {
+      base_price_cents: (experience.base_price_per_person ?? 0) * 100,
+      pricing_model: 'PER_PERSON',
+      category: 'ACTIVITY',
+    },
+    { guests: party_size },
+  )
+  const totalAmount = priceResult.total_cents / 100
   const depositAmount = (totalAmount * (experience.deposit_pct ?? 25)) / 100
 
   // Step 5: Create reservation (status: pending)
@@ -101,6 +147,8 @@ export async function POST(
     party_size,
     total_amount: totalAmount,
     deposit_amount: depositAmount,
+    pricing_model: priceResult.pricing_model,
+    pricing_breakdown: priceResult.breakdown,
     // Client adds to cart with type='experience', then calls /api/checkout
   })
 }

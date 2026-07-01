@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createHmac, randomUUID } from 'crypto'
+import { calculatePrice, pricingModelForCategory, type PricingModel } from '@planviry/shared'
 
 // GET /api/attendees?event_id=&status=&search=
 // POST /api/attendees — create single attendee (admin/vendor manual add)
@@ -93,7 +94,7 @@ export async function POST(request: NextRequest) {
   // Create a reservation (manual attendee add by vendor/admin)
   const { data: event } = await supabase
     .from('inventory_items')
-    .select('id, vendor_id, base_price_cents, category')
+    .select('id, vendor_id, base_price_cents, category, metadata')
     .eq('id', event_id)
     .maybeSingle()
 
@@ -101,6 +102,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Event not found or not an event ticket' }, { status: 404 })
   }
 
+  // ─── FIX-5: model-aware pricing via shared adapter ──────────────────────
+  // Previously: `event.base_price_cents * quantity` (inline). Now routed
+  // through `calculatePrice` with PER_SEAT model (EVENT_TICKET category).
+  // For general-admission events without per-seat pricing, the adapter sums
+  // `quantity` seats at `base_price_cents` each — equivalent to the prior
+  // math, but centralised so future per-seat price variations work too.
+  const metadata = (event.metadata ?? {}) as { pricing_model?: PricingModel }
+  const eventCategory = (event.category as string | null) ?? 'EVENT_TICKET'
+  const pricingModel = metadata.pricing_model ?? pricingModelForCategory(eventCategory)
+  const priceResult = calculatePrice(
+    supabase,
+    {
+      base_price_cents: (event.base_price_cents ?? 0) as number,
+      pricing_model: pricingModel,
+      category: eventCategory,
+    },
+    { quantity },
+  )
+  const total_price_cents = priceResult.total_cents
+  const unit_price_cents = Math.round(priceResult.subtotal_cents / Math.max(1, quantity))
   const { data: reservation, error } = await supabase
     .from('reservations')
     .insert({
@@ -109,8 +130,8 @@ export async function POST(request: NextRequest) {
       vendor_id: event.vendor_id,
       status: 'CONFIRMED', // manual add = confirmed
       quantity,
-      unit_price_cents: event.base_price_cents,
-      total_price_cents: event.base_price_cents * quantity,
+      unit_price_cents,
+      total_price_cents,
       currency: 'USD',
       confirmed_at: new Date().toISOString(),
     })

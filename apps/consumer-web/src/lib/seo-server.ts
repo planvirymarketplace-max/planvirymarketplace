@@ -139,13 +139,13 @@ export async function fetchVendorsByCategory(
 
     const vendorIds = assignments.map((a: any) => a.vendor_id)
 
-    // Fetch vendor details
+    // Fetch vendor details (live schema: vendor_accounts; published = status in ACTIVE/ONBOARDED/CLAIMED)
     const { data: vendors } = await supabase
-      .from('Vendor')
+      .from('vendor_accounts')
       .select('*')
       .in('id', vendorIds)
-      .eq('isPublished', true)
-      .order('isFeatured', { ascending: false })
+      .in('status', ['ACTIVE', 'ONBOARDED', 'CLAIMED'])
+      .order('created_at', { ascending: false })
 
     return (vendors || []).map((v: any) => toSEOVendor(v, { name: category.name, slug: category.slug }))
   } catch (error) {
@@ -163,11 +163,11 @@ export async function fetchVendorsBySearch(
     const supabase = createAdminClient()
 
     const { data: vendors } = await supabase
-      .from('Vendor')
+      .from('vendor_accounts')
       .select('*')
-      .eq('isPublished', true)
+      .in('status', ['ACTIVE', 'ONBOARDED', 'CLAIMED'])
       .or(`name.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%,address.ilike.%${searchQuery}%`)
-      .order('isFeatured', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(100)
 
     return (vendors || []).map((v: any) => toSEOVendor(v))
@@ -186,10 +186,10 @@ export async function fetchVendorBySlug(
     const supabase = createAdminClient()
 
     const { data: vendor } = await supabase
-      .from('Vendor')
+      .from('vendor_accounts')
       .select('*')
       .eq('slug', slug)
-      .eq('isPublished', true)
+      .in('status', ['ACTIVE', 'ONBOARDED', 'CLAIMED'])
       .single()
 
     if (!vendor) return null
@@ -218,9 +218,9 @@ export async function fetchAllVendorSlugs(): Promise<string[]> {
     const supabase = createAdminClient()
 
     const { data: vendors } = await supabase
-      .from('Vendor')
+      .from('vendor_accounts')
       .select('slug')
-      .eq('isPublished', true)
+      .in('status', ['ACTIVE', 'ONBOARDED', 'CLAIMED'])
 
     return (vendors || []).map((v: any) => v.slug).filter(Boolean)
   } catch (error) {
@@ -285,11 +285,11 @@ export async function fetchVendorReviews(
     const supabase = createAdminClient()
 
     const { data: reviews } = await supabase
-      .from('VendorReview')
+      .from('reviews')
       .select('*')
-      .eq('vendorId', vendorId)
-      .eq('isApproved', true)
-      .order('createdAt', { ascending: false })
+      .eq('vendor_id', vendorId)
+      .eq('is_approved', true)
+      .order('created_at', { ascending: false })
       .limit(10)
 
     return (reviews || []).map((r: any) => ({

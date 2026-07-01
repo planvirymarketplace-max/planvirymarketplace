@@ -31,13 +31,15 @@ const STATUS_STYLES: Record<string, string> = {
 
 // Inventory categories supported by the canonical schema (inventory_category enum).
 // Used to populate the category filter dropdown.
+// FIX-10: aligned to the live Supabase enum — SERVICE (was VENDOR_SERVICE)
+// and ACTIVITY (was EXPERIENCE).
 const CATEGORY_OPTIONS: { value: string; label: string }[] = [
   { value: 'ALL', label: 'All categories' },
   { value: 'LODGING', label: 'Lodging' },
   { value: 'VENUE_RENTAL', label: 'Venue Rental' },
-  { value: 'VENDOR_SERVICE', label: 'Vendor Service' },
+  { value: 'SERVICE', label: 'Service' },
   { value: 'DINING', label: 'Dining' },
-  { value: 'EXPERIENCE', label: 'Experience' },
+  { value: 'ACTIVITY', label: 'Activity' },
   { value: 'EVENT_TICKET', label: 'Event Ticket' },
   { value: 'TRANSPORT', label: 'Transport' },
 ]
@@ -45,9 +47,9 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
 const CATEGORY_STYLES: Record<string, string> = {
   LODGING: 'bg-purple-100 text-purple-700',
   VENUE_RENTAL: 'bg-rose-100 text-rose-700',
-  VENDOR_SERVICE: 'bg-amber-100 text-amber-700',
+  SERVICE: 'bg-amber-100 text-amber-700',
   DINING: 'bg-orange-100 text-orange-700',
-  EXPERIENCE: 'bg-teal-100 text-teal-700',
+  ACTIVITY: 'bg-teal-100 text-teal-700',
   EVENT_TICKET: 'bg-cyan-100 text-cyan-700',
   TRANSPORT: 'bg-lime-100 text-lime-700',
 }

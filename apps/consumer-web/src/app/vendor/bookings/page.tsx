@@ -58,9 +58,9 @@ const STATUS_STYLES: Record<string, string> = {
 const CATEGORY_STYLES: Record<string, string> = {
   LODGING: 'bg-purple-100 text-purple-700',
   VENUE_RENTAL: 'bg-rose-100 text-rose-700',
-  VENDOR_SERVICE: 'bg-amber-100 text-amber-700',
+  SERVICE: 'bg-amber-100 text-amber-700',
   DINING: 'bg-orange-100 text-orange-700',
-  EXPERIENCE: 'bg-teal-100 text-teal-700',
+  ACTIVITY: 'bg-teal-100 text-teal-700',
   EVENT_TICKET: 'bg-cyan-100 text-cyan-700',
   TRANSPORT: 'bg-lime-100 text-lime-700',
 }

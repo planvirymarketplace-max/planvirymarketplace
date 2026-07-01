@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requiresStripeCharge, type CartItem } from '@/lib/cart-context'
+import { calculatePrice, pricingModelForCategory, type PricingModel } from '@planviry/shared'
 import Stripe from 'stripe'
 import { randomUUID } from 'crypto'
 
@@ -95,7 +96,7 @@ export async function POST(request: NextRequest) {
 
     const { data: invItem } = await supabase
       .from('inventory_items')
-      .select('id, vendor_id, base_price_cents, currency, status, title')
+      .select('id, vendor_id, base_price_cents, currency, status, title, category, metadata')
       .eq('id', inventoryItemId)
       .maybeSingle()
 
@@ -104,8 +105,31 @@ export async function POST(request: NextRequest) {
     }
 
     const quantity = item.quantity ?? 1
-    const unitPriceCents = item.amount * 100
-    const totalPriceCents = unitPriceCents * quantity
+    // ─── FIX-5: model-aware pricing via shared adapter ─────────────────────
+    // Previously this was `item.amount * 100 * quantity` — which ignored
+    // pricing_model entirely. A 3-night LODGING booking at $100/night stored
+    // as base_price_cents=10000 charged only $100 instead of $300. The adapter
+    // applies the NIGHTLY multiplier (and PER_PERSON / PER_SEAT / PER_SLOT /
+    // HOURLY as appropriate) using the item's category + metadata.pricing_model.
+    const metadata = (invItem.metadata ?? {}) as { pricing_model?: PricingModel }
+    const itemCategory = (invItem.category as string | null) ?? item.category ?? item.type
+    const pricingModel = metadata.pricing_model ?? pricingModelForCategory(itemCategory)
+    const priceResult = calculatePrice(
+      supabase,
+      {
+        base_price_cents: (invItem.base_price_cents ?? item.amount * 100) as number,
+        pricing_model: pricingModel,
+        category: itemCategory,
+        start_date: item.start_date,
+        end_date: item.end_date,
+      },
+      {
+        quantity,
+        guests: item.party_size,
+      },
+    )
+    const unitPriceCents = Math.round(priceResult.subtotal_cents / Math.max(1, quantity))
+    const totalPriceCents = priceResult.total_cents
     subtotalCents += totalPriceCents
 
     // ─── ATOMIC capacity check + decrement (BR-R-004 / BR-C-004) ───────

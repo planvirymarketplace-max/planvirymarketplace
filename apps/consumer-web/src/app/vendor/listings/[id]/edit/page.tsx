@@ -6,12 +6,14 @@ import { createClient } from '@/lib/supabase/client'
 import { AppLayoutShell } from '@/components/AppLayoutShell'
 import { ArrowLeft, Loader2, Save } from 'lucide-react'
 
+// FIX-10: aligned to the live Supabase `inventory_category` enum
+// (SERVICE / ACTIVITY — was VENDOR_SERVICE / EXPERIENCE).
 const CATEGORIES = [
   'LODGING',
   'VENUE_RENTAL',
-  'VENDOR_SERVICE',
+  'SERVICE',
   'DINING',
-  'EXPERIENCE',
+  'ACTIVITY',
   'EVENT_TICKET',
   'TRANSPORT',
 ] as const

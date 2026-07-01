@@ -9,9 +9,15 @@
  * Notes:
  * - `category` is a single value when one category maps to a surface.
  * - `categories` is supplied when the surface spans multiple categories
- *   (e.g. /party mixes VENUE_RENTAL + VENDOR_SERVICE).
+ *   (e.g. /party mixes VENUE_RENTAL + SERVICE).
  * - /vendors keeps an empty filter — it shows all categories.
  * - /travel already redirects to /lodging/search (LODGING) — not listed here.
+ *
+ * FIX-10: aligned to the live Supabase `inventory_category` enum. The enum
+ * only allows {LODGING, DINING, EVENT_TICKET, ACTIVITY, TRANSPORT,
+ * VENUE_RENTAL, SERVICE}. The previous values VENDOR_SERVICE → SERVICE and
+ * EXPERIENCE → ACTIVITY were rejected by Postgres with
+ * `invalid input value for enum inventory_category`.
  */
 
 export type SurfaceSlug =
@@ -35,14 +41,14 @@ export interface SurfaceInventoryFilter {
 }
 
 export const SURFACE_TO_INVENTORY: Record<SurfaceSlug, SurfaceInventoryFilter> = {
-  services: { category: 'VENDOR_SERVICE', label: 'Vendor services' },
-  'things-to-do': { category: 'EXPERIENCE', label: 'Experiences & attractions' },
+  services: { category: 'SERVICE', label: 'Vendor services' },
+  'things-to-do': { category: 'ACTIVITY', label: 'Experiences & attractions' },
   'food-drink': { category: 'DINING', label: 'Dining & catering' },
   'live-shows': { category: 'EVENT_TICKET', label: 'Live shows & event tickets' },
-  party: { categories: ['VENUE_RENTAL', 'VENDOR_SERVICE'], label: 'Venues & event services' },
+  party: { categories: ['VENUE_RENTAL', 'SERVICE'], label: 'Venues & event services' },
   spaces: { category: 'VENUE_RENTAL', label: 'Venue rentals' },
   vendors: { label: 'All vendors' }, // no category filter — show everything
-  plan: { category: 'VENDOR_SERVICE', label: 'Planning services' },
+  plan: { category: 'SERVICE', label: 'Planning services' },
   travel: { category: 'LODGING', label: 'Lodging' },
 };
 

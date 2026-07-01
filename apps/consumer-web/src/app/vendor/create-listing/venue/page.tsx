@@ -37,7 +37,7 @@ export default function CreateVenuePage() {
       }
       const { data: staff, error: staffErr } = await supabase
         .from('vendor_staff')
-        .select('vendor_id, vendor_accounts!inner(name, location_id)')
+        .select('vendor_id, vendor_accounts!inner(name)')
         .eq('user_id', user.id)
         .eq('status', 'ACTIVE')
         .maybeSingle()

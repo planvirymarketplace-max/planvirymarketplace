@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: [
     "*.space-z.ai",
     "preview-chat-*.space-z.ai",
+    "127.0.0.1",
+    "localhost",
+    "21.0.10.198",
   ],
   images: {
     remotePatterns: [

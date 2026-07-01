@@ -1,9 +1,9 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
-import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { Button } from '../../../components/ui/button'
+import { createClient } from '@/lib/supabase/client'
+import { Button } from '../../../../components/ui/button'
 
 interface Show {
   id: string
@@ -51,8 +51,8 @@ interface EditingPerformance {
 }
 
 export default function AdminShowsPage() {
-  const { data: session, status } = useSession()
   const router = useRouter()
+  const supabase = createClient()
   const [shows, setShows] = useState<Show[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -68,7 +68,7 @@ export default function AdminShowsPage() {
   const fetchShows = async () => {
     try {
       setLoading(true)
-      const response = await fetch('/api/shows')
+      const response = await fetch('/api/ticketing/shows')
       const data = await response.json()
 
       if (data.success) {
@@ -123,7 +123,7 @@ export default function AdminShowsPage() {
     setIsSaving(true)
     try {
       const method = editingShow.id ? 'PUT' : 'POST'
-      const url = editingShow.id ? `/api/shows/${editingShow.id}` : '/api/shows'
+      const url = editingShow.id ? `/api/ticketing/shows/${editingShow.id}` : '/api/ticketing/shows'
 
       const response = await fetch(url, {
         method,
@@ -182,7 +182,7 @@ export default function AdminShowsPage() {
     setIsSaving(true)
     try {
       const method = editingPerformance.id ? 'PUT' : 'POST'
-      const url = editingPerformance.id ? `/api/performances/${editingPerformance.id}` : '/api/performances'
+      const url = editingPerformance.id ? `/api/ticketing/performances/${editingPerformance.id}` : '/api/ticketing/performances'
 
       const performanceData = {
         ...editingPerformance,
@@ -219,7 +219,7 @@ export default function AdminShowsPage() {
     }
 
     try {
-      const response = await fetch(`/api/performances/${performanceId}`, {
+      const response = await fetch(`/api/ticketing/performances/${performanceId}`, {
         method: 'DELETE'
       })
 
@@ -249,23 +249,23 @@ export default function AdminShowsPage() {
   }
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/admin/login')
-    } else if (status === 'authenticated') {
-      fetchShows()
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.push('/login?returnTo=/tickets/admin/shows')
+        return
+      }
+      await fetchShows()
     }
-  }, [status, router])
+    init()
+  }, [router, supabase])
 
-  if (status === 'loading' || loading) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     )
-  }
-
-  if (status === 'unauthenticated') {
-    return null
   }
 
   if (error) {
@@ -293,11 +293,6 @@ export default function AdminShowsPage() {
           <div className="flex justify-between items-center py-4">
             <div className="flex items-center">
               <h1 className="text-xl font-semibold text-gray-900">Shows Management</h1>
-              {session?.user?.organization && (
-                <span className="ml-4 px-3 py-1 bg-blue-100 text-blue-800 text-sm rounded-full">
-                  {session.user.organization.name}
-                </span>
-              )}
             </div>
             <Button variant="primary" onClick={handleNewShow}>
               Add New Show

@@ -4,14 +4,106 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { AppLayoutShell } from '@/components/AppLayoutShell'
-import { DollarSign, Ticket, Users, TrendingUp, Calendar, Settings, CreditCard, Store, Home, Wrench, Bell, Mail, CalendarDays, Tag } from 'lucide-react'
+import {
+  DollarSign,
+  Ticket,
+  Users,
+  TrendingUp,
+  Calendar,
+  Settings,
+  CreditCard,
+  Store,
+  Home,
+  Wrench,
+  Bell,
+  Mail,
+  CalendarDays,
+  Tag,
+  Building2,
+  MapPin,
+  Briefcase,
+  UtensilsCrossed,
+  Car,
+  ArrowRight,
+} from 'lucide-react'
+
+type Stats = {
+  listings: number
+  reservations: number
+  revenue: number
+  checkIns: number
+  checkInsSource: 'check_ins' | 'reservations' | 'none'
+}
+
+type ModuleCard = {
+  href: string
+  title: string
+  description: string
+  icon: React.ComponentType<{ className?: string }>
+  category: string
+}
+
+// The "5 modules" the vendor portal exposes — each maps to a create-listing
+// branch (or, for Lodging, the Staybnb-hosted wizard at /hosting/create).
+// Listed as 6 because the spec calls out 6 categories
+// (Lodging / Event Tickets / Venues / Services / Dining / Transport).
+const MODULES: ModuleCard[] = [
+  {
+    href: '/hosting/create',
+    title: 'Lodging',
+    description: 'Vacation rentals, lofts, and short-stay properties.',
+    icon: Building2,
+    category: 'LODGING',
+  },
+  {
+    href: '/tickets/admin/shows',
+    title: 'Event Tickets',
+    description: 'Shows with performances, tiers, and reserved seating.',
+    icon: Ticket,
+    category: 'EVENT_TICKET',
+  },
+  {
+    href: '/vendor/create-listing/venue',
+    title: 'Venues',
+    description: 'Hourly-rental spaces — halls, rooftops, studios.',
+    icon: MapPin,
+    category: 'VENUE_RENTAL',
+  },
+  {
+    href: '/vendor/create-listing/service',
+    title: 'Services',
+    description: 'Pro vendors — DJs, photographers, florists, planners.',
+    icon: Briefcase,
+    category: 'SERVICE',
+  },
+  {
+    href: '/vendor/create-listing/dining',
+    title: 'Dining',
+    description: 'Chef tables, tasting menus, private dinners.',
+    icon: UtensilsCrossed,
+    category: 'DINING',
+  },
+  {
+    href: '/vendor/create-listing/transport',
+    title: 'Transport',
+    description: 'Shuttles, party buses, limos, charter vans.',
+    icon: Car,
+    category: 'TRANSPORT',
+  },
+]
 
 export default function VendorDashboardPage() {
   const router = useRouter()
   const supabase = createClient()
   const [loading, setLoading] = useState(true)
   const [vendor, setVendor] = useState<any>(null)
-  const [stats, setStats] = useState({ listings: 0, reservations: 0, revenue: 0, checkIns: 0 })
+  const [stats, setStats] = useState<Stats>({
+    listings: 0,
+    reservations: 0,
+    revenue: 0,
+    checkIns: 0,
+    checkInsSource: 'none',
+  })
   const [stripeLoading, setStripeLoading] = useState(false)
   const [stripeError, setStripeError] = useState('')
 
@@ -54,9 +146,88 @@ export default function VendorDashboardPage() {
       if (!staff) { router.push('/onboarding/vendor'); return }
       setVendor(staff.vendor_accounts)
 
-      const { count: listings } = await supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('vendor_id', staff.vendor_id)
-      const { count: reservations } = await supabase.from('reservations').select('*', { count: 'exact', head: true }).eq('vendor_id', staff.vendor_id).in('status', ['CONFIRMED', 'PENDING'])
-      setStats({ listings: listings ?? 0, reservations: reservations ?? 0, revenue: 0, checkIns: 0 })
+      const vendorId = staff.vendor_id
+
+      // Listings count (any status).
+      const { count: listings } = await supabase
+        .from('inventory_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('vendor_id', vendorId)
+
+      // Reservations count (CONFIRMED or PENDING — the active pipeline).
+      const { count: reservations } = await supabase
+        .from('reservations')
+        .select('*', { count: 'exact', head: true })
+        .eq('vendor_id', vendorId)
+        .in('status', ['CONFIRMED', 'PENDING'])
+
+      // Revenue = SUM(total_price_cents) for CONFIRMED reservations.
+      // Supabase REST has no SUM RPC wired up, so we fetch the column and sum
+      // in JS. Wrap in try/catch — a query error must never crash the dashboard.
+      let revenue = 0
+      try {
+        const { data: revRows, error: revErr } = await supabase
+          .from('reservations')
+          .select('total_price_cents')
+          .eq('vendor_id', vendorId)
+          .eq('status', 'CONFIRMED')
+        if (!revErr && Array.isArray(revRows)) {
+          revenue = revRows.reduce(
+            (sum, r) => sum + (typeof r.total_price_cents === 'number' ? r.total_price_cents : 0),
+            0,
+          )
+        }
+      } catch {
+        revenue = 0
+      }
+
+      // Check-ins: prefer the check_ins table; fall back to COMPLETED
+      // reservations if the table is missing or the query errors.
+      // NOTE: check_ins has no vendor_id column (FK is via reservation_id),
+      // so this query is expected to error on the live schema — the fallback
+      // path is the real production source for this number.
+      let checkIns = 0
+      let checkInsSource: Stats['checkInsSource'] = 'none'
+      try {
+        const { count: ciCount, error: ciErr } = await supabase
+          .from('check_ins')
+          .select('id', { count: 'exact', head: true })
+          .eq('vendor_id', vendorId)
+        if (!ciErr && ciCount != null) {
+          checkIns = ciCount
+          checkInsSource = 'check_ins'
+        } else {
+          // Fallback: count COMPLETED reservations for this vendor.
+          const { count: completedCount } = await supabase
+            .from('reservations')
+            .select('*', { count: 'exact', head: true })
+            .eq('vendor_id', vendorId)
+            .eq('status', 'COMPLETED')
+          checkIns = completedCount ?? 0
+          checkInsSource = 'reservations'
+        }
+      } catch {
+        try {
+          const { count: completedCount } = await supabase
+            .from('reservations')
+            .select('*', { count: 'exact', head: true })
+            .eq('vendor_id', vendorId)
+            .eq('status', 'COMPLETED')
+          checkIns = completedCount ?? 0
+          checkInsSource = 'reservations'
+        } catch {
+          checkIns = 0
+          checkInsSource = 'none'
+        }
+      }
+
+      setStats({
+        listings: listings ?? 0,
+        reservations: reservations ?? 0,
+        revenue,
+        checkIns,
+        checkInsSource,
+      })
       setLoading(false)
     }
     load()
@@ -101,8 +272,10 @@ export default function VendorDashboardPage() {
         </aside>
 
         {/* Main */}
-        <main className="flex-1 p-8">
+        <main className="flex-1 p-4 md:p-8">
           <h1 className="text-2xl font-black text-black mb-6">Dashboard</h1>
+
+          {/* Stat cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <Store className="w-5 h-5 text-gray-400 mb-1" />
@@ -118,13 +291,58 @@ export default function VendorDashboardPage() {
               <DollarSign className="w-5 h-5 text-gray-400 mb-1" />
               <p className="text-xs text-gray-500">Revenue</p>
               <p className="text-2xl font-black text-black">${(stats.revenue / 100).toFixed(0)}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">confirmed bookings</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <Users className="w-5 h-5 text-gray-400 mb-1" />
               <p className="text-xs text-gray-500">Check-ins</p>
               <p className="text-2xl font-black text-black">{stats.checkIns}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">
+                {stats.checkInsSource === 'check_ins'
+                  ? 'from check_ins table'
+                  : stats.checkInsSource === 'reservations'
+                    ? 'via COMPLETED reservations'
+                    : 'unavailable'}
+              </p>
             </div>
           </div>
+
+          {/* Modules section */}
+          <section className="mb-8">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-lg font-black text-black">Your modules</h2>
+              <p className="text-xs text-gray-400">
+                Six listing types you can manage. Click any to create or manage.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {MODULES.map((m) => {
+                const Icon = m.icon
+                return (
+                  <Link
+                    key={m.category}
+                    href={m.href}
+                    className="group bg-white rounded-xl border border-gray-200 p-5 hover:border-black hover:shadow-md transition-all flex flex-col"
+                  >
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-10 h-10 rounded-lg bg-gray-100 group-hover:bg-black flex items-center justify-center transition-colors">
+                        <Icon className="w-5 h-5 text-gray-700 group-hover:text-white transition-colors" />
+                      </div>
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-gray-400 bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded">
+                        {m.category.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                    <h3 className="text-base font-black text-black mb-1">{m.title}</h3>
+                    <p className="text-sm text-gray-500 leading-snug flex-1">{m.description}</p>
+                    <span className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-gray-700 group-hover:text-black">
+                      Manage
+                      <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+                    </span>
+                  </Link>
+                )
+              })}
+            </div>
+          </section>
 
           {!vendor?.stripe_connect_account_id && (
             <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6">

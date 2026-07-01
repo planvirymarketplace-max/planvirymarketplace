@@ -27,6 +27,7 @@ import {
   getClientIp,
   RATE_LIMITS,
 } from "@/lib/api/rate-limit"
+import { calculatePrice, pricingModelForCategory, type PricingModel } from "@planviry/shared"
 
 export async function POST(request: NextRequest) {
   try {
@@ -72,7 +73,7 @@ export async function POST(request: NextRequest) {
     const itemIds = cartItems.map((i) => i.item_id)
     const { data: items } = await admin
       .from("inventory_items")
-      .select("id, vendor_id, base_price_cents, currency, status, title")
+      .select("id, vendor_id, base_price_cents, currency, status, title, category, metadata")
       .in("id", itemIds)
 
     const itemMap = new Map((items ?? []).map((i) => [i.id, i]))
@@ -94,15 +95,34 @@ export async function POST(request: NextRequest) {
     // The /api/checkout handler expects CartItem[] from `@/lib/cart-context`
     // with shape { type, listing_id|vendor_id|experience_slot_id, name, amount, quantity }.
     // We translate our v1 cart_items into that shape here.
+    //
+    // FIX-5: use the shared pricing adapter to derive the per-unit price
+    // (quantity=1) so the model is honoured even before /api/checkout applies
+    // its own per-item pricing. The downstream /api/checkout route re-fetches
+    // inventory_items + metadata.pricing_model and applies the full multiplier
+    // (nights / guests / seats / slots / hours) — here we just resolve the
+    // authoritative base price.
     const checkoutPayload = {
       cart_items: cartItems.map((ci) => {
         const inv = itemMap.get(ci.item_id)!
+        const metadata = (inv.metadata ?? {}) as { pricing_model?: PricingModel }
+        const category = (inv.category as string | null) ?? undefined
+        const pricingModel = metadata.pricing_model ?? pricingModelForCategory(category ?? "")
+        const priceResult = calculatePrice(
+          admin,
+          {
+            base_price_cents: (inv.base_price_cents ?? 0) as number,
+            pricing_model: pricingModel,
+            category,
+          },
+          { quantity: 1 },
+        )
         return {
           type: "inventory",
           listing_id: ci.item_id,
           vendor_id: inv.vendor_id,
           name: inv.title,
-          amount: (ci.unit_price_cents ?? inv.base_price_cents ?? 0) / 100,
+          amount: priceResult.total_cents / 100,
           quantity: ci.quantity,
         }
       }),

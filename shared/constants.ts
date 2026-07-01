@@ -35,15 +35,25 @@ export type Vertical = (typeof VERTICAL_ROW)[number];
 export const PLAN_BAR_FIELDS = ["What", "Where", "When", "Price", "Attendees"] as const;
 
 // DOM-003 — InventoryItem.category enum values (Part III §3.1, binding).
+// FIX-10: aligned to the live Supabase `inventory_category` enum
+// (LODGING, DINING, EVENT_TICKET, ACTIVITY, TRANSPORT, VENUE_RENTAL, SERVICE).
+// Legacy non-enum categories (VACATION_RENTAL, FLIGHT, CAR_RENTAL,
+// VENUE_SPACE, DINING_RESERVATION, CRUISE_CABIN, TRANSIT) are kept for
+// backward-compat with callers that still use them as ad-hoc metadata
+// labels — they are NOT valid INSERT values for inventory_items.category.
 export const INVENTORY_CATEGORIES = [
   "LODGING",
+  "DINING",
+  "EVENT_TICKET",
+  "ACTIVITY",
+  "TRANSPORT",
+  "VENUE_RENTAL",
+  "SERVICE",
+  // ── legacy / non-enum categories (NOT insertable into inventory_items) ──
   "VACATION_RENTAL",
   "FLIGHT",
   "CAR_RENTAL",
-  "EXPERIENCE",
-  "EVENT_TICKET",
   "VENUE_SPACE",
-  "VENDOR_SERVICE",
   "DINING_RESERVATION",
   "CRUISE_CABIN",
   "TRANSIT",

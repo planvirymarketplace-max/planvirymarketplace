@@ -3,8 +3,8 @@
 import React, { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { Customer } from '../../../types'
-import { Button } from '../../../components/ui/button'
+import { Customer } from '@/lib/types/eventseats'
+import { Button } from '../../../../components/ui/button'
 
 interface CustomerFilters {
   search?: string
@@ -43,7 +43,7 @@ export default function AdminCustomersPage() {
       if (filters.emailOptIn) params.set('emailOptIn', filters.emailOptIn)
       if (filters.smsOptIn) params.set('smsOptIn', filters.smsOptIn)
 
-      const response = await fetch(`/api/customers?${params.toString()}`)
+      const response = await fetch(`/api/ticketing/customers?${params.toString()}`)
       const data = await response.json()
 
       if (data.success) {

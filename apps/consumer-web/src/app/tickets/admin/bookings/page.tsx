@@ -4,8 +4,8 @@ import React, { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Booking } from '../../../types'
-import { Button } from '../../../components/ui/button'
+import { Booking } from '@/lib/types/eventseats'
+import { Button } from '../../../../components/ui/button'
 
 interface BookingFilters {
   status?: string
@@ -46,7 +46,7 @@ export default function AdminBookingsPage() {
         )
       })
 
-      const response = await fetch(`/api/bookings?${params}`)
+      const response = await fetch(`/api/ticketing/bookings?${params}`)
       const data = await response.json()
 
       if (data.success) {

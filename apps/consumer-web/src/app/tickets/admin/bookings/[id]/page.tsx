@@ -3,8 +3,8 @@
 import React, { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter, useParams } from 'next/navigation'
-import { Booking } from '../../../../types'
-import { Button } from '@/components/ticketing/ui/button'
+import { Booking } from '@/lib/types/eventseats'
+import { Button } from '@/components/ui/button'
 
 export default function BookingDetailPage() {
   const { data: session, status } = useSession()
@@ -35,7 +35,7 @@ export default function BookingDetailPage() {
     setIsLoading(true)
     setRefundMessage('')
     try {
-      const response = await fetch(`/api/bookings/${bookingId}`)
+      const response = await fetch(`/api/ticketing/bookings/${bookingId}`)
       const data = await response.json()
 
       if (data.success) {
@@ -105,7 +105,7 @@ export default function BookingDetailPage() {
         payload.amount = amt
       }
 
-      const res = await fetch('/api/admin/refunds', {
+      const res = await fetch('/api/ticketing/admin/refunds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
