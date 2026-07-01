@@ -137,8 +137,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Search & Filters
   const [searchWhat, setSearchWhat] = useState<string>('');
-  const [searchWhere, setSearchWhere] = useState<string>('Savannah, GA');
-  const [searchWhen, setSearchWhen] = useState<string>('Oct 18 - Oct 20');
+  const [searchWhere, setSearchWhere] = useState<string>('');
+  const [searchWhen, setSearchWhen] = useState<string>('');
   const [searchPrice, setSearchPrice] = useState<string>('all');
   const [searchAttendees, setSearchAttendees] = useState<string>('4 Guests');
   const [searchFilters, setSearchFilters] = useState<string>('all');
