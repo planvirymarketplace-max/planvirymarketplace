@@ -49,7 +49,7 @@ export function extractEventsFromReservations(reservations: Array<Record<string,
     const category = (inv.category as string) || 'default'
     const colors = CATEGORY_COLORS[category] || CATEGORY_COLORS.default
     const startsAt = r.starts_at as string
-    const endsAt = r.endss_at as string
+    const endsAt = r.ends_at as string
 
     // Skip reservations without dates (vendor services without specific time)
     if (!startsAt) continue

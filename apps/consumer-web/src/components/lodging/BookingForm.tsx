@@ -163,7 +163,10 @@ export default function BookingForm({ listing, children, onConfirm }: { listing:
     onConfirm?.();
 
     const query = buildListingParams(guests, dateRange.startDate, dateRange.endDate);
-    router.push(`/checkout/${listing.id}?${query}`);
+    // P1-3: route through /lodging/checkout/[listingId] which immediately
+    // bridges into the unified /checkout page (with the lodging item
+    // pre-added to the cart). The unified /api/checkout handles payment.
+    router.push(`/lodging/checkout/${listing.id}?${query}`);
   };
 
   return (

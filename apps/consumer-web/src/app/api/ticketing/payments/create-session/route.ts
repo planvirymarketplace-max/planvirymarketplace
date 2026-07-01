@@ -1,3 +1,30 @@
+/**
+ * POST /api/ticketing/payments/create-session
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * P1-3 — SECONDARY / STANDALONE TICKET PURCHASE FLOW
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The unified checkout for Planviry is `POST /api/checkout` (multi-item cart
+ * → orders → reservation_line_items → Stripe Checkout Session). That route
+ * handles every vertical (lodging, booking, experience, restaurant, ticket).
+ *
+ * This EventSeats-era route is preserved for **standalone ticket purchases**
+ * where the buyer is purchasing seats for a single performance/show and does
+ * NOT want to mix the purchase with other cart items. It pre-creates a
+ * PENDING `bookings` (aliased to `reservations` via the db-compat shim) +
+ * `booking_items` rows to lock the seats, then opens its own Stripe Checkout
+ * Session scoped to that single booking.
+ *
+ * Downstream callers should default to `/api/checkout` for any flow that
+ * supports cart composition. Only use this endpoint when:
+ *   - the buyer is on a single-show seat-map page (`/tickets/book/[showId]/[performanceId]`),
+ *   - the show uses EventSeats pricing (adult/child/concession tiers in GBP),
+ *   - and there is no intent to combine the purchase with other inventory.
+ *
+ * The webhook at `/api/ticketing/stripe/webhook` reconciles the booking back
+ * to CONFIRMED once Stripe fires `checkout.session.completed`.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 const getServerSupabase = () => createAdminClient()

@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { AppLayoutShell } from '@/components/AppLayoutShell'
-import { DollarSign, Ticket, Users, TrendingUp, Calendar, Settings, CreditCard, Store, Home, Wrench, Bell } from 'lucide-react'
+import { DollarSign, Ticket, Users, TrendingUp, Calendar, Settings, CreditCard, Store, Home, Wrench, Bell, Mail, CalendarDays, Tag } from 'lucide-react'
 
 export default function VendorDashboardPage() {
   const router = useRouter()
@@ -68,7 +68,10 @@ export default function VendorDashboardPage() {
     { href: '/vendor/dashboard', label: 'Dashboard', icon: Home },
     { href: '/vendor/pms', label: 'PMS Grid', icon: Wrench },
     { href: '/vendor/bookings', label: 'Bookings', icon: Calendar },
+    { href: '/vendor/availability', label: 'Availability', icon: CalendarDays },
     { href: '/vendor/tickets', label: 'Service Tickets', icon: Ticket },
+    { href: '/vendor/messages', label: 'Messages', icon: Mail },
+    { href: '/vendor/promotions', label: 'Promotions', icon: Tag },
     { href: '/vendor/events', label: 'Events', icon: Users },
     { href: '/vendor/payouts', label: 'Payouts', icon: CreditCard },
     { href: '/vendor/analytics', label: 'Analytics', icon: TrendingUp },

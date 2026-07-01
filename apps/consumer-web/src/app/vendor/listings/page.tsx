@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { AppLayoutShell } from '@/components/AppLayoutShell'
-import { ArrowLeft, Loader2, Pencil, Trash2, Eye, EyeOff, Plus, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Loader2, Pencil, Trash2, Eye, EyeOff, Plus, RefreshCw, Filter } from 'lucide-react'
 
 type Listing = {
   id: string
@@ -27,6 +27,34 @@ const STATUS_STYLES: Record<string, string> = {
   PAUSED: 'bg-amber-100 text-amber-700',
   ARCHIVED: 'bg-red-100 text-red-700',
   DELETED: 'bg-red-100 text-red-700',
+}
+
+// Inventory categories supported by the canonical schema (inventory_category enum).
+// Used to populate the category filter dropdown.
+const CATEGORY_OPTIONS: { value: string; label: string }[] = [
+  { value: 'ALL', label: 'All categories' },
+  { value: 'LODGING', label: 'Lodging' },
+  { value: 'VENUE_RENTAL', label: 'Venue Rental' },
+  { value: 'VENDOR_SERVICE', label: 'Vendor Service' },
+  { value: 'DINING', label: 'Dining' },
+  { value: 'EXPERIENCE', label: 'Experience' },
+  { value: 'EVENT_TICKET', label: 'Event Ticket' },
+  { value: 'TRANSPORT', label: 'Transport' },
+]
+
+const CATEGORY_STYLES: Record<string, string> = {
+  LODGING: 'bg-purple-100 text-purple-700',
+  VENUE_RENTAL: 'bg-rose-100 text-rose-700',
+  VENDOR_SERVICE: 'bg-amber-100 text-amber-700',
+  DINING: 'bg-orange-100 text-orange-700',
+  EXPERIENCE: 'bg-teal-100 text-teal-700',
+  EVENT_TICKET: 'bg-cyan-100 text-cyan-700',
+  TRANSPORT: 'bg-lime-100 text-lime-700',
+}
+
+function formatCategory(c: string | null): string {
+  if (!c) return '—'
+  return c.replace(/_/g, ' ')
 }
 
 function formatPrice(cents: number | null, currency: string | null) {
@@ -55,6 +83,7 @@ export default function VendorListingsPage() {
   const [vendorId, setVendorId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [actionInFlight, setActionInFlight] = useState<Record<string, 'publish' | 'unpublish' | 'delete' | undefined>>({})
+  const [categoryFilter, setCategoryFilter] = useState<string>('ALL')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -152,6 +181,10 @@ export default function VendorListingsPage() {
     }
   }
 
+  const filtered = categoryFilter === 'ALL'
+    ? listings
+    : listings.filter((l) => l.category === categoryFilter)
+
   return (
     <AppLayoutShell>
       <div className="bg-gray-50 min-h-screen">
@@ -182,6 +215,26 @@ export default function VendorListingsPage() {
             </div>
           </div>
 
+          {/* Category filter */}
+          <div className="bg-white rounded-xl border border-gray-200 p-3 mb-4 flex items-center gap-2 flex-wrap">
+            <label htmlFor="categoryFilter" className="inline-flex items-center gap-1.5 text-xs font-bold text-gray-500 uppercase tracking-wide">
+              <Filter className="w-3.5 h-3.5" /> Filter
+            </label>
+            <select
+              id="categoryFilter"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-black"
+            >
+              {CATEGORY_OPTIONS.map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </select>
+            <span className="text-xs text-gray-400 ml-auto">
+              Showing {filtered.length} of {listings.length}
+            </span>
+          </div>
+
           {error && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 mb-4">
               {error}
@@ -202,6 +255,16 @@ export default function VendorListingsPage() {
                 <Plus className="w-4 h-4" /> Create your first listing
               </Link>
             </div>
+          ) : filtered.length === 0 ? (
+            <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+              <p className="text-gray-500 mb-4">No listings match the selected category.</p>
+              <button
+                onClick={() => setCategoryFilter('ALL')}
+                className="inline-flex items-center gap-2 text-sm font-bold text-white bg-black px-4 py-2 rounded-lg hover:bg-gray-800"
+              >
+                Clear filter
+              </button>
+            </div>
           ) : (
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <div className="hidden md:grid grid-cols-12 gap-3 px-5 py-3 border-b border-gray-100 bg-gray-50 text-xs font-bold text-gray-500 uppercase tracking-wide">
@@ -212,7 +275,7 @@ export default function VendorListingsPage() {
                 <div className="col-span-2 text-right">Actions</div>
               </div>
               <ul className="divide-y divide-gray-100">
-                {listings.map(item => {
+                {filtered.map(item => {
                   const isPublished = item.status === 'PUBLISHED' || item.status === 'ACTIVE'
                   const isArchived = item.status === 'ARCHIVED' || item.status === 'DELETED'
                   const inFlight = actionInFlight[item.id]
@@ -226,7 +289,11 @@ export default function VendorListingsPage() {
                       </div>
                       <div className="md:col-span-2">
                         <span className="text-xs text-gray-600 md:hidden font-bold">Category: </span>
-                        <span className="text-xs text-gray-700 font-mono">{item.category ?? '—'}</span>
+                        <span
+                          className={`inline-block text-xs font-bold px-2 py-0.5 rounded ${CATEGORY_STYLES[item.category ?? ''] ?? 'bg-gray-100 text-gray-700'}`}
+                        >
+                          {formatCategory(item.category)}
+                        </span>
                       </div>
                       <div className="md:col-span-2">
                         <span
